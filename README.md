@@ -56,18 +56,19 @@
 | `match` | 两轮匹配：主体词优先 → 其余盖空镜 / 低露脸 |
 | `ai_video_prepare` | 可选：导出 `work/ai_video` 结构化 prompt 包 |
 | `ai_video_apply` | 可选：把 Seedance 成片写回 `picture_plan`（禁止复用） |
-| `assemble` | **无声画面轨** + **单人声轨** mux 成片；静态图自动 Ken Burns 推拉/平移 |
-| `package` | 导出 clips / timeline / SRT |
+| `assemble` | **无声画面轨** + **单人声轨** mux；帧对齐 VO 总长；静态图 Ken Burns |
+| `package` | 总包 + **`package_by_talk`**（每口播：`剪映导入/` / `预览/` / `工程/`） |
 
-### 音频策略（重要）
+### 音频与剪映策略（重要）
 
-- 人声：仅 `voiceover_clean.wav`（由各口播段 `atrim` 精确拼接）
-- **成片从第一个字开口开始**（见 `docs/VOICEOVER_ALIGNMENT.md`）：
-  1. `transcribe` 开 `word_timestamps`，用首词/尾词收紧每句  
-  2. `clean_vo` 再对齐；无词级时 RMS 兜底  
-  3. 口播1 / 口播2 各自片头 BGM 都会裁掉，不只处理全片第一句  
-- 画面：talk / broll 都只出 **无声** 片段再 concat  
-- 禁止对 talk 再叠一份源片音轨（否则易出现「最后一句重复」）  
+- 人声：仅 `voiceover_clean.wav`（各口播段 `atrim` 拼接）
+- **从第一个字开口** + **末字完整**（见 `docs/VOICEOVER_ALIGNMENT.md`）：
+  1. `transcribe`：`word_timestamps`  
+  2. `clean_vo`：首词收紧；**末词 RMS release** 收尾（防「自己」被切）  
+  3. 各口播文件片头 BGM 都会裁掉  
+- 画面：无声片段；**禁止 talk 再叠源音**；**禁止额外末镜冻尾**  
+- **剪映**：只导入 `work/package_by_talk/<口播>/剪映导入/`（见 `docs/PACKAGE_BY_TALK.md`）  
+  不要整夹导入（会带上多个 roughcut / 工程文件）
 
 改对齐逻辑后请：
 
@@ -117,7 +118,8 @@ python run_pipeline.py run my_trip
 ```
 
 成片：`my_trip/work/export/roughcut.mp4`  
-剪映包：`my_trip/work/package/`
+总包：`my_trip/work/package/`  
+**分口播剪映包**：`my_trip/work/package_by_talk/<口播名>/剪映导入/`
 
 ### 素材命名约定
 

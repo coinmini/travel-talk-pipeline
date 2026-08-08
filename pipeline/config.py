@@ -49,8 +49,8 @@ DEFAULTS: dict[str, Any] = {
         "speech_onset_min_hold_sec": 0.12,
         # False=每个口播文件第一句都裁；True=仅整条时间线第一句
         "trim_leading_only_global_first": False,
-        # 段尾留白，避免最后一个字被 atrim 切半（秒）；末句宜 ≥0.25
-        "segment_tail_pad_sec": 0.35,
+        # 末词声学 release 实测后再加的极小安全底（秒）；主延展靠 RMS，勿靠大 pad
+        "segment_tail_pad_sec": 0.06,
     },
     "broll": {
         # 单镜目标时长范围
@@ -150,7 +150,7 @@ DEFAULTS: dict[str, Any] = {
         "subtitle_fontsize": 42,
         "subtitle_margin_v": 160,
         "include_english_stub": True,
-        # 多口播源时，package 阶段额外输出 work/package_by_talk/<口播名>/
+        # 多口播源 → work/package_by_talk/<口播名>/{剪映导入,预览,工程}/
         "split_by_talk": True,
     },
     # 静态图 B-roll：Ken Burns 推拉/平移，避免呆板定格

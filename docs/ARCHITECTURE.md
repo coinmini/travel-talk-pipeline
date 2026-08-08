@@ -11,16 +11,19 @@
 | 露脸过多 | 空镜总时长不足 / 匹配乱抢 | 两轮匹配；目标 face_ratio；补空镜或 reuse |
 | 静态图呆板 | 照片 B-roll 定格铺时长 | `assemble` 内建 Ken Burns 推拉/平移 |
 | 片头空白几秒 | Whisper 句级 start 含 BGM/环境声 | **词级时间戳**收紧句首；`clean_vo` 对齐第一字 |
+| 末字被裁（如「自己」） | `word.end` 偏紧；`-shortest` 裁尾 | **RMS release** 收尾；mux 以人声为准 |
+| 剪映分轨末尾缺画面 | 整夹导入 / Σ clips ≠ 人声 / 硬冻尾 | 只导 `剪映导入/`；段长=人声；**无额外冻尾** |
+| 剪映嘴形字幕漂 | ceil 帧累积漂移 | assemble 总帧吸到 VO；分包 clip 等长 plan |
 
 ## 数据流
 
 ```
 口播 mp4 ──whisper(+词级时间戳)──► segments + words[]
                 │
-                │  首词/尾词收紧 start/end
+                │  首词收紧 start；尾词 + release 收 end
                 ▼
-         clean_vo：drop/merge/deoverlap
-                │  再按 words 对齐开口（无 words 则 RMS）
+         clean_vo：drop/merge(words)/deoverlap
+                │  开口 word/RMS；收尾 detect_speech_release_end
                 │  成片 t=0 = 全文第一个字
                 ├──────────────────► voiceover timeline
                 │                         │
@@ -32,33 +35,31 @@ B-roll ──tag(+AI)──► tags + scores                     │
                 │                                      │
                 └──────── match (2-pass) ──► picture_plan
                                               │
-                         optional: ai_video_prepare
-                              Seedance text2video
-                         optional: ai_video_apply ─────┤
+                         optional: ai_video_prepare / apply
                                               │
-                              assemble：
-                                · talk：与 VO 同 src_start（已是开口）
-                                · 视频 B-roll：trim
-                                · 静态图：Ken Burns
+                              assemble：帧对齐 VO 总长
+                                · talk：同 src_start（开口）
+                                · 无额外末镜冻尾
                                               │
-                                         concat + mux ──► roughcut.mp4
+                    ┌─────────────────────────┴─────────────────────────┐
+                    ▼                                                   ▼
+              export/roughcut.mp4                          package_by_talk/<口播>/
+              package/（整片）                               剪映导入/ + 预览/ + 工程/
 ```
 
 ## 模块
 
-- `pipeline/cli.py` — CLI 与阶段编排
-- `pipeline/config.py` — 默认配置与 yaml 合并
-- `pipeline/utils.py` — ffprobe / 抽帧 / 工具
-- `pipeline/stages/transcribe.py` — Whisper + **词级时间戳**
-- `pipeline/stages/clean_vo.py` — 拼 VO、**段首对齐第一字**
-- `pipeline/stages/assemble.py` — 成片；静态图 Ken Burns
-- `pipeline/stages/*` — 其余阶段
-- `pipeline/ai/*` — Grok Build AI 产物约定
-- `pipeline/ai_video/*` — Seedance/Dreamina 文生视频 B-roll
-- `scripts/seedance_t2v.py` / `seedance_poll_download.py` — CLI 提交与下载
-- `pipeline/templates/*` — 默认与示例 yaml
-- `docs/IMAGE_MOTION.md` — 静态图 Ken Burns
-- `docs/VOICEOVER_ALIGNMENT.md` — 口播开口对齐
+- `pipeline/cli.py` — CLI 与阶段编排  
+- `pipeline/config.py` — 默认配置与 yaml 合并  
+- `pipeline/utils.py` — ffprobe / 抽帧 / 工具  
+- `pipeline/stages/transcribe.py` — Whisper + **词级时间戳**  
+- `pipeline/stages/clean_vo.py` — 拼 VO、**开口 + release 收尾**  
+- `pipeline/stages/assemble.py` — 成片；Ken Burns；**帧对齐 VO**  
+- `pipeline/stages/export_package.py` — 总包 + **`package_by_talk` 分层**  
+- `pipeline/ai/*` / `pipeline/ai_video/*` — AI 标签与 Seedance B-roll  
+- `docs/VOICEOVER_ALIGNMENT.md` — 开口与末字  
+- `docs/PACKAGE_BY_TALK.md` — 剪映分包导入  
+- `docs/IMAGE_MOTION.md` — 静态图 Ken Burns  
 
 ## 扩展点
 
@@ -67,7 +68,7 @@ B-roll ──tag(+AI)──► tags + scores                     │
 3. **真·多模态 API**：可在 `apply_ai` 前增加自动写 `broll_vlm.json` 的脚本  
 4. **AI 视频提供商**：当前仅 `seedance_cli`；新 provider 接在 `pipeline/ai_video/`  
 5. **静态图动效**：`assemble.image_motion_*`  
-6. **开口检测**：词级优先；RMS 参数见 `talk.speech_onset_*`  
+6. **开口/收尾检测**：词级 + RMS；参数见 `talk.speech_onset_*` / `segment_tail_pad_sec`  
 
 
 

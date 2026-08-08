@@ -358,8 +358,43 @@ def run_export_split_by_talk(
         stem = Path(talk_name).stem
         pkg_name = _safe_pkg_name(stem)
         pkg = ensure_dir(root / pkg_name)
-        clips_dir = ensure_dir(pkg / "clips")
+        # 目录分层，避免剪映「整夹导入」把 roughcut/工程 json 全塞进时间线
+        #   剪映导入/  ← 只导入这一层（clips + 人声 + 字幕）
+        #   预览/      ← 合成 roughcut
+        #   工程/      ← timeline 等元数据
+        import_dir = ensure_dir(pkg / "剪映导入")
+        preview_dir = ensure_dir(pkg / "预览")
+        meta_dir = ensure_dir(pkg / "工程")
+        clips_dir = ensure_dir(import_dir / "clips")
         for old in clips_dir.glob("*.mp4"):
+            try:
+                old.unlink()
+            except OSError:
+                pass
+        # 清理旧版扁平布局残留，防止再次整夹误导
+        for stale in (
+            "clips",
+            "verify",
+            "voiceover_clean.wav",
+            "captions_zh.srt",
+            "roughcut.mp4",
+            "timeline.json",
+            "timeline.md",
+            "voiceover.json",
+            "voiceover.txt",
+            "picture_plan.json",
+            "concat.txt",
+            "picture_track.mp4",
+        ):
+            sp = pkg / stale
+            try:
+                if sp.is_dir():
+                    shutil.rmtree(sp, ignore_errors=True)
+                elif sp.exists():
+                    sp.unlink()
+            except OSError:
+                pass
+        for old in pkg.glob("roughcut*.mp4"):
             try:
                 old.unlink()
             except OSError:
@@ -400,10 +435,68 @@ def run_export_split_by_talk(
             )
             out = clips_dir / f"{safe}.mp4"
             part = parts_dir / f"v_{gi:04d}.mp4"
+            # 与人声段严格等长（plan duration）；禁止额外末镜冻尾，避免嘴形/字幕漂移
+            need_dur = float(np["duration"])
             if part.exists() and part.stat().st_size > 1000:
-                shutil.copy2(part, out)
+                try:
+                    from ..utils import media_info as _mi
+
+                    got = float(_mi(part).get("duration") or 0)
+                    # 容差内直接拷贝；否则裁/补到 need_dur（补只到段长，不超）
+                    if abs(got - need_dur) <= 0.04:
+                        shutil.copy2(part, out)
+                    elif got > need_dur + 0.04:
+                        run(
+                            [
+                                "ffmpeg",
+                                "-y",
+                                "-i",
+                                str(part),
+                                "-t",
+                                f"{need_dur:.6f}",
+                                "-an",
+                                "-c:v",
+                                "libx264",
+                                "-preset",
+                                "veryfast",
+                                "-crf",
+                                "18",
+                                "-pix_fmt",
+                                "yuv420p",
+                                str(out),
+                            ]
+                        )
+                    else:
+                        pad = need_dur - got + 0.02
+                        run(
+                            [
+                                "ffmpeg",
+                                "-y",
+                                "-i",
+                                str(part),
+                                "-vf",
+                                f"tpad=stop_mode=clone:stop_duration={pad:.3f}",
+                                "-an",
+                                "-c:v",
+                                "libx264",
+                                "-preset",
+                                "veryfast",
+                                "-crf",
+                                "18",
+                                "-pix_fmt",
+                                "yuv420p",
+                                "-t",
+                                f"{need_dur:.6f}",
+                                str(out),
+                            ]
+                        )
+                except Exception as e:
+                    print(f"  [warn] fit clip {out.name}: {e}")
+                    try:
+                        shutil.copy2(part, out)
+                    except OSError:
+                        pass
             else:
-                # 无 assemble 部件则跳过复制（仍写 timeline 提示需先 assemble）
                 print(f"  [warn] missing assemble part {part.name} for {talk_name}")
             np["clip_file"] = out.name
             np["clip_path"] = str(out)
@@ -411,9 +504,9 @@ def run_export_split_by_talk(
             if out.exists():
                 part_paths.append(out)
 
-        # 本集口播轨：从总 VO 裁出 [t0, t1)
-        local_vo = pkg / "voiceover_clean.wav"
-        dur = max(0.05, t1 - t0)
+        # 本集口播轨：从总 VO 裁出 [t0, t1)。只放进「剪映导入/」。
+        local_vo = import_dir / "voiceover_clean.wav"
+        speech_dur = max(0.05, t1 - t0)
         run(
             [
                 "ffmpeg",
@@ -421,7 +514,7 @@ def run_export_split_by_talk(
                 "-i",
                 str(vo_wav),
                 "-af",
-                f"atrim=start={t0:.6f}:duration={dur:.6f},asetpts=PTS-STARTPTS",
+                f"atrim=start={t0:.6f}:duration={speech_dur:.6f},asetpts=PTS-STARTPTS",
                 "-ac",
                 "1",
                 "-ar",
@@ -429,8 +522,11 @@ def run_export_split_by_talk(
                 str(local_vo),
             ]
         )
+        dur = speech_dur
 
-        # 字幕：时间轴归零
+        # 画面与人声对齐：不做末镜额外冻尾（用户要求嘴形/字幕同步，Σ 与 VO 同长即可）
+
+        # 字幕 / 说明 → 剪映导入；工程元数据 → 工程/
         srt_lines = []
         for i, seg in enumerate(segs, 1):
             ls = float(seg["timeline_start"]) - t0
@@ -439,9 +535,21 @@ def run_export_split_by_talk(
             srt_lines.append(
                 f"{i}\n{ts_srt(ls)} --> {ts_srt(le)}\n{text}\n"
             )
-        write_text(pkg / "captions_zh.srt", "\n".join(srt_lines))
+        write_text(import_dir / "captions_zh.srt", "\n".join(srt_lines))
         write_text(
-            pkg / "voiceover.txt",
+            import_dir / "导入说明.txt",
+            (
+                "【只导入本文件夹「剪映导入」】\n"
+                "不要把上一级整夹拖进剪映（会带上预览 roughcut / 工程 json，顺序会乱）。\n\n"
+                "1. 新建竖屏 1080×1920\n"
+                "2. clips/ 按 01→末 顺序拖到视频轨，首尾相接、无空隙\n"
+                "3. voiceover_clean.wav 拖到音频轨，对齐时间线 0\n"
+                "4. 可选：captions_zh.srt\n\n"
+                "说明：各 clip 与对应人声段等长，无额外末镜冻尾。\n"
+            ),
+        )
+        write_text(
+            meta_dir / "voiceover.txt",
             "\n".join((s.get("text") or "").strip() for s in segs),
         )
 
@@ -449,7 +557,7 @@ def run_export_split_by_talk(
             "total_duration": round(dur, 3),
             "segment_count": len(segs),
             "voiceover_wav": str(local_vo),
-            "captions_zh_srt": str(pkg / "captions_zh.srt"),
+            "captions_zh_srt": str(import_dir / "captions_zh.srt"),
             "timeline": [
                 {
                     **s,
@@ -461,8 +569,9 @@ def run_export_split_by_talk(
             "full_text": "\n".join((s.get("text") or "").strip() for s in segs),
             "split_from": talk_name,
             "global_timeline_range": [round(t0, 3), round(t1, 3)],
+            "import_dir": str(import_dir),
         }
-        write_json(pkg / "voiceover.json", local_vo_meta)
+        write_json(meta_dir / "voiceover.json", local_vo_meta)
 
         local_plan = {
             "total_duration": round(dur, 3),
@@ -472,17 +581,17 @@ def run_export_split_by_talk(
             "split_from": talk_name,
             "parent_title": title_base,
         }
-        write_json(pkg / "picture_plan.json", local_plan)
+        write_json(meta_dir / "picture_plan.json", local_plan)
 
-        # 本集 roughcut
-        rough = pkg / "roughcut.mp4"
+        # 本集 roughcut → 预览/
+        rough = preview_dir / "roughcut.mp4"
         if part_paths:
-            concat_list = pkg / "concat.txt"
+            concat_list = preview_dir / "concat.txt"
             write_text(
                 concat_list,
                 "\n".join(f"file '{p.resolve()}'" for p in part_paths) + "\n",
             )
-            video_only = pkg / "picture_track.mp4"
+            video_only = preview_dir / "picture_track.mp4"
             run(
                 [
                     "ffmpeg",
@@ -507,16 +616,32 @@ def run_export_split_by_talk(
                     str(video_only),
                 ]
             )
-            # 以人声为准：画面短则冻尾帧补齐，绝不 -shortest 裁掉末字
+            # 预览 roughcut：与人声等长对齐（画面略短才冻 1 帧内，不做长冻尾/尾静音）
             from ..utils import media_info as _media_info
 
             v_dur = float(_media_info(video_only).get("duration") or 0)
             a_dur = float(_media_info(local_vo).get("duration") or 0)
-            vpad = max(0.0, a_dur - v_dur + 0.05)
-            if vpad > 0.04:
-                fc = f"[0:v]tpad=stop_mode=clone:stop_duration={vpad:.3f}[v]"
-                map_v = "[v]"
-                filt = ["-filter_complex", fc, "-map", map_v, "-map", "1:a:0"]
+            out_dur = a_dur if a_dur > 0 else v_dur
+            if v_dur + 0.04 < out_dur:
+                # 仅补齐到人声长度（通常 < 1 帧级误差）
+                vpad = out_dur - v_dur + 0.02
+                filt = [
+                    "-filter_complex",
+                    f"[0:v]tpad=stop_mode=clone:stop_duration={vpad:.3f}[v]",
+                    "-map",
+                    "[v]",
+                    "-map",
+                    "1:a:0",
+                ]
+            elif v_dur > out_dur + 0.04:
+                filt = [
+                    "-filter_complex",
+                    f"[0:v]trim=duration={out_dur:.6f},setpts=PTS-STARTPTS[v]",
+                    "-map",
+                    "[v]",
+                    "-map",
+                    "1:a:0",
+                ]
             else:
                 filt = ["-map", "0:v:0", "-map", "1:a:0"]
             run(
@@ -539,7 +664,7 @@ def run_export_split_by_talk(
                     "-b:a",
                     a_br,
                     "-t",
-                    f"{max(a_dur, v_dur):.3f}",
+                    f"{out_dur:.3f}",
                     "-movflags",
                     "+faststart",
                     str(rough),
@@ -552,24 +677,25 @@ def run_export_split_by_talk(
                 pass
 
         part_title = f"{title_base} · {stem}"
-        # timeline.md
+        # timeline.md → 工程/
         lines = [
             f"# {part_title} · 剪映时间线（独立成片）",
             "",
             f"- 目标画幅：{width}×{height} 竖屏",
             f"- 本集口播源：`{talk_name}`",
             f"- 本集时长：{dur:.1f}s（原整片 {t0:.1f}–{t1:.1f}s）",
-            f"- 画面片段：{len(clip_rows)} 段（见 `clips/`）",
-            f"- 人声主轴：`voiceover_clean.wav`",
-            f"- 中文字幕：`captions_zh.srt`",
-            f"- 粗剪成片：`roughcut.mp4`",
+            f"- **剪映请只导入** `剪映导入/`（勿整夹导入）",
+            f"- 画面：`剪映导入/clips/`（{len(clip_rows)} 段）",
+            f"- 人声：`剪映导入/voiceover_clean.wav`",
+            f"- 字幕：`剪映导入/captions_zh.srt`",
+            f"- 预览：`预览/roughcut.mp4`",
             "",
             "## 剪映导入步骤",
             "",
             "1. 新建竖屏项目（1080×1920）",
-            "2. 导入本目录 `clips/` + `voiceover_clean.wav`",
-            "3. 按序号把 clips 依次放进视频轨，人声对齐 0 秒",
-            "4. 导入 `captions_zh.srt`，加 BGM / 贴纸 / 封面后导出",
+            "2. **只打开** `剪映导入/` 文件夹",
+            "3. `clips/` 按 01→末 顺序放视频轨；`voiceover_clean.wav` 对齐 0 秒",
+            "4. 可选导入 `captions_zh.srt`",
             "",
             "## 时间线明细",
             "",
@@ -597,9 +723,9 @@ def run_export_split_by_talk(
                 "",
             ]
         )
-        write_text(pkg / "timeline.md", "\n".join(lines))
+        write_text(meta_dir / "timeline.md", "\n".join(lines))
         write_json(
-            pkg / "timeline.json",
+            meta_dir / "timeline.json",
             {
                 "title": part_title,
                 "talk_source": talk_name,
@@ -608,29 +734,33 @@ def run_export_split_by_talk(
                 "voiceover_duration": dur,
                 "clips": clip_rows,
                 "vo_segments": local_vo_meta["timeline"],
+                "layout": {
+                    "import": "剪映导入/",
+                    "preview": "预览/roughcut.mp4",
+                    "meta": "工程/",
+                },
             },
         )
         write_text(
             pkg / "README.md",
-            f"""# {part_title} · 独立交付包
+            f"""# {part_title}
 
-从整片按口播源拆分：`{talk_name}`（{dur:.1f}s）。
+按口播源拆分：`{talk_name}`（{dur:.1f}s）。
 
-| 文件 | 说明 |
+| 目录 | 用途 |
 |------|------|
-| `roughcut.mp4` | 本集粗剪成片 |
-| `clips/` | 本集竖屏片段（与 roughcut 同源） |
-| `voiceover_clean.wav` | 本集人声 |
-| `captions_zh.srt` | 本集字幕（时间从 0 开始） |
-| `timeline.md` | 剪映导入说明 |
+| **`剪映导入/`** | **只把这一层拖进剪映**（clips + 人声 + 字幕） |
+| `预览/` | 已合成 roughcut，快速试看 |
+| `工程/` | timeline / json，勿导入剪映 |
 
-与姐妹包同一父项目：`{title_base}`，目录 `work/package_by_talk/`。
+**不要**把整个 `{pkg_name}/` 文件夹导入剪映（会混入 roughcut 与工程文件，顺序会乱）。
 """,
         )
 
         info = {
             "talk_source": talk_name,
             "package_dir": str(pkg),
+            "import_dir": str(import_dir),
             "clip_count": len(clip_rows),
             "duration": round(dur, 3),
             "roughcut": str(rough) if rough.exists() else "",
@@ -638,8 +768,9 @@ def run_export_split_by_talk(
         }
         packages.append(info)
         print(
-            f"  split package: {pkg_name}/  clips={len(clip_rows)}  "
-            f"dur={dur:.1f}s  roughcut={'yes' if rough.exists() else 'no'}"
+            f"  split package: {pkg_name}/  import=剪映导入/  "
+            f"clips={len(clip_rows)}  dur={dur:.1f}s  "
+            f"roughcut={'yes' if rough.exists() else 'no'}"
         )
 
     result = {

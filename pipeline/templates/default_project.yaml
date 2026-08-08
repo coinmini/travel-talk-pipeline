@@ -21,7 +21,7 @@ talk:
   speech_onset_peak_ratio: 0.45
   speech_onset_min_hold_sec: 0.12
   trim_leading_only_global_first: false  # 每个口播文件第一句都处理
-  segment_tail_pad_sec: 0.35             # 末字留白，防裁断
+  segment_tail_pad_sec: 0.06             # release 实测后的安全底（非硬补尾巴）
 
 broll:
   min_clip_sec: 1.6
@@ -48,7 +48,7 @@ export:
   subtitle_fontsize: 42
   subtitle_margin_v: 160
   include_english_stub: true
-  # 多个口播文件时拆成独立 package（work/package_by_talk/<口播名>/）
+  # 多口播 → package_by_talk/<口播>/{剪映导入,预览,工程}/（只导入「剪映导入」）
   split_by_talk: true
 
 # 静态图盖画：推近/拉远/平移（Ken Burns）

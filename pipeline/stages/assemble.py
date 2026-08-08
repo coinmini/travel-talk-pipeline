@@ -26,8 +26,24 @@ def _has_subtitles_filter() -> bool:
         return False
 
 
-def _snap_dur(dur: float, fps: int) -> float:
-    frames = max(1, int(round(float(dur) * fps)))
+def _snap_dur(dur: float, fps: int, *, mode: str = "round") -> float:
+    """Snap duration to whole frames.
+
+    Default **round** + residual on last piece (see ``run_assemble``) so
+    Σ video ≈ VO length without systematic ceil-drift (which desyncs CapCut
+    dual-track lip-sync / captions). Use ceil only when explicitly needed.
+    """
+    import math
+
+    if fps <= 0:
+        return max(0.05, float(dur))
+    raw = max(0.05, float(dur))
+    if mode == "floor":
+        frames = max(1, int(math.floor(raw * fps + 1e-9)))
+    elif mode == "ceil":
+        frames = max(1, int(math.ceil(raw * fps - 1e-9)))
+    else:
+        frames = max(1, int(round(raw * fps)))
     return frames / float(fps)
 
 
@@ -226,15 +242,13 @@ def _render_video_only(
         )
         return
 
-    # talk：严格不超过 src_end，避免把下一句画面/口型带进来
-    # broll：按 src_start + dur 取（match 已保证源够长）
-    allow_freeze = False
+    # talk：优先不超过 src_end；若 VO 段略长于源跨度/帧对齐后变长，冻尾帧补齐
+    # （剪映分轨导入时画面绝不能短于人声段）
+    # broll：按 src_start + dur 取，源不够则冻尾
+    allow_freeze = True
     if piece.get("type") == "talk" and src_span is not None:
-        # 时长以 min(plan, src_span) 为准，禁止读出 src_end
-        dur = min(dur, src_span)
-        dur = _snap_dur(dur, fps)
-        if dur > src_span:
-            dur = src_span
+        # 需要输出的时长已在上层 ceil 对齐；源不够时用冻帧，禁止裁短 VO
+        pass
 
     vf = _v_filters(
         width,
@@ -311,18 +325,27 @@ def run_assemble(
     if not pieces:
         raise RuntimeError("picture_timeline is empty; run match first")
 
-    # 画面时长必须与 VO 段一致：优先用 piece.duration（来自 clean_vo）
+    # 画面时长与 VO 段对齐：nearest 帧；总帧数吸到 VO 总长，避免 ceil 累积漂移
+    # （剪映分轨 = 各 clip 相加，漂移会表现为嘴形/字幕错位）
     part_paths: list[Path] = []
     total = 0.0
     image_motion_count = 0
+    plan_durs = [float(p.get("duration") or 0.1) for p in pieces]
+    snap_durs = [_snap_dur(d, fps, mode="round") for d in plan_durs]
+    vo_total = float(media_info(vo_wav).get("duration") or sum(plan_durs) or 0)
+    if vo_total > 0.05 and snap_durs:
+        target_frames = max(1, int(round(vo_total * fps)))
+        got_frames = sum(max(1, int(round(d * fps))) for d in snap_durs)
+        # 把差额记到最后一段，使 Σ 画面帧 ≈ 人声总长（不额外冻长尾）
+        delta_f = target_frames - got_frames
+        if delta_f != 0:
+            last_f = max(1, int(round(snap_durs[-1] * fps)) + delta_f)
+            snap_durs[-1] = last_f / float(fps)
+
     for i, piece in enumerate(pieces):
-        dur = float(piece.get("duration") or 0.1)
-        # talk 再保险：不超过源跨度
-        if piece.get("type") == "talk":
-            span = float(piece.get("src_end") or 0) - float(piece.get("src_start") or 0)
-            if span > 0.05:
-                dur = min(dur, span)
-        dur = _snap_dur(dur, fps)
+        dur = snap_durs[i] if i < len(snap_durs) else _snap_dur(
+            float(piece.get("duration") or 0.1), fps, mode="round"
+        )
         out = parts_dir / f"v_{i:04d}.mp4"
         src_name = str(piece.get("src_name", ""))[:22]
         is_img = Path(str(piece.get("src") or "")).suffix.lower() in {
