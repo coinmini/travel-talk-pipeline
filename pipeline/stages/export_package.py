@@ -24,6 +24,12 @@ def run_export_package(
     title = cfg.get("title") or project_dir.name
     pkg = ensure_dir(work_dir / "package")
     clips_dir = ensure_dir(pkg / "clips")
+    # 清空旧 clips，避免与新时间线（开口对齐后）混在一起
+    for old in clips_dir.glob("*.mp4"):
+        try:
+            old.unlink()
+        except OSError:
+            pass
     out_cfg = cfg.get("output") or {}
     width = int(out_cfg.get("width") or 1080)
     height = int(out_cfg.get("height") or 1920)
@@ -31,69 +37,102 @@ def run_export_package(
 
     pieces = picture_plan.get("picture_timeline") or []
     clip_rows = []
+    # 与 roughcut 同源：优先复制 assemble 已渲染的 v_XXXX.mp4
+    # （含词级开口 src_start、静态图 Ken Burns）
+    parts_dir = work_dir / "assemble_parts"
+    copied_from_assemble = 0
 
     for i, piece in enumerate(pieces):
         label = f"{i+1:02d}_{piece['type']}_{Path(piece.get('src_name') or 'clip').stem[:20]}"
         # sanitize
         safe = "".join(c if c.isalnum() or c in "-_." or "\u4e00" <= c <= "\u9fff" else "_" for c in label)
         out = clips_dir / f"{safe}.mp4"
-        ss = float(piece.get("src_start") or 0)
-        to = float(piece.get("src_end") or ss + float(piece["duration"]))
-        dur = float(piece["duration"])
-        src = piece["src"]
-        vf = (
-            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-            f"crop={width}:{height},fps={fps},setsar=1,format=yuv420p"
+        part = parts_dir / f"v_{i:04d}.mp4"
+        used_assemble = False
+        if part.exists() and part.stat().st_size > 1000:
+            try:
+                shutil.copy2(part, out)
+                used_assemble = True
+                copied_from_assemble += 1
+            except OSError:
+                used_assemble = False
+
+        if not used_assemble:
+            ss = float(piece.get("src_start") or 0)
+            to = float(piece.get("src_end") or ss + float(piece["duration"]))
+            dur = float(piece["duration"])
+            src = piece["src"]
+            vf = (
+                f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+                f"crop={width}:{height},fps={fps},setsar=1,format=yuv420p"
+            )
+            if Path(src).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".heic"}:
+                # 回退渲染：尽量与 assemble 一致做 Ken Burns
+                try:
+                    from .assemble import _image_motion_vf, _pick_image_motion
+
+                    motion = _pick_image_motion(piece, i, None)
+                    vf = _image_motion_vf(width, height, fps, dur, motion)
+                except Exception:
+                    pass
+                run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-loop",
+                        "1",
+                        "-i",
+                        src,
+                        "-t",
+                        f"{dur:.3f}",
+                        "-vf",
+                        vf,
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "veryfast",
+                        "-crf",
+                        "20",
+                        "-an",
+                        str(out),
+                    ]
+                )
+            else:
+                run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-ss",
+                        f"{ss:.3f}",
+                        "-i",
+                        src,
+                        "-t",
+                        f"{dur:.3f}",
+                        "-vf",
+                        vf,
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "veryfast",
+                        "-crf",
+                        "20",
+                        "-an",
+                        str(out),
+                    ]
+                )
+        clip_rows.append(
+            {
+                **piece,
+                "clip_file": out.name,
+                "clip_path": str(out),
+                "from_assemble_part": used_assemble,
+            }
         )
-        if Path(src).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
-            run(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-loop",
-                    "1",
-                    "-i",
-                    src,
-                    "-t",
-                    f"{dur:.3f}",
-                    "-vf",
-                    vf,
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "veryfast",
-                    "-crf",
-                    "20",
-                    "-an",
-                    str(out),
-                ]
-            )
-        else:
-            run(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-ss",
-                    f"{ss:.3f}",
-                    "-to",
-                    f"{to:.3f}",
-                    "-i",
-                    src,
-                    "-t",
-                    f"{dur:.3f}",
-                    "-vf",
-                    vf,
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "veryfast",
-                    "-crf",
-                    "20",
-                    "-an",
-                    str(out),
-                ]
-            )
-        clip_rows.append({**piece, "clip_file": out.name, "clip_path": str(out)})
+    if copied_from_assemble:
+        print(
+            f"  package clips: {copied_from_assemble}/{len(pieces)} "
+            f"copied from assemble_parts (match roughcut)"
+        )
 
     # copy master VO + srt
     vo_src = Path(voiceover.get("voiceover_wav") or "")
