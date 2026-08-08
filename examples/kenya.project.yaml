@@ -26,7 +26,8 @@ match:
   max_reuse: 1
   # 目标露脸占比（实际受「无脸空镜总时长」硬约束）
   target_face_ratio: 0.12
-  force_face_open_segments: 1
+  # 开场主角先出镜（句数）
+  force_face_open_segments: 2
   force_face_close_segments: 1
   # 单句单镜，便于口播关键词对齐画面
   broll_pack_max_sec: 4.5
@@ -34,6 +35,11 @@ match:
 
 export:
   burn_subtitles: true
+
+# 静态图 B-roll：assemble 阶段自动 Ken Burns（推拉/平移）
+assemble:
+  image_motion: true
+  image_zoom_max: 1.22
 
 ai:
   enabled: false

@@ -37,7 +37,7 @@
 │  ingest → transcribe → clean_vo → tag_broll         │
 │       → [ai_prepare → apply_ai] → match             │
 │       → [ai_video_prepare → seedance → apply]       │
-│       → assemble → package                          │
+│       → assemble（静态图 Ken Burns）→ package        │
 └─────────────────────────────────────────────────────┘
         │
         ▼
@@ -203,10 +203,16 @@ match:
   reuse_broll: false
   max_reuse: 1                 # 改 2 可显著降低露脸（空镜可复用）
   target_face_ratio: 0.12      # 目标露脸；受空镜总时长硬约束
+  force_face_open_segments: 2  # 开场前 N 句强制主角露脸
   broll_pack_max_segments: 1   # 单句单镜，语义更好对齐
+
+assemble:
+  image_motion: true           # 静态图自动推拉/平移（Ken Burns）
+  image_zoom_max: 1.22         # 推拉幅度
 ```
 
-完整示例：`examples/kenya.project.yaml`。
+完整示例：`examples/kenya.project.yaml`。  
+静态图动效说明：`docs/IMAGE_MOTION.md`。
 
 ---
 

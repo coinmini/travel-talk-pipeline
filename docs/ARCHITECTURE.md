@@ -9,6 +9,7 @@
 | B-roll 画面卡住 | 短镜冻帧硬撑长句 | 禁止冻帧；源不够长则换镜/露脸 |
 | 说到河马却出自拍 | 启发式误标 + 泛「动物」命中 | VLM/手写真标签；主体词严格命中 |
 | 露脸过多 | 空镜总时长不足 / 匹配乱抢 | 两轮匹配；目标 face_ratio；补空镜或 reuse |
+| 静态图呆板 | 照片 B-roll 定格铺时长 | `assemble` 内建 Ken Burns 推拉/平移 |
 
 ## 数据流
 
@@ -30,6 +31,10 @@ B-roll ──tag(+AI)──► tags + scores                          │
                               Seedance text2video           │
                          optional: ai_video_apply ──────────┤
                                               │             │
+                              assemble 每段渲染：              │
+                                · talk / 视频 B-roll：trim    │
+                                · 静态图：Ken Burns zoom/pan  │
+                                              │             │
                                          无声视频段 concat    │
                                               ▼             │
                                          picture_track ────mux──► roughcut.mp4
@@ -40,11 +45,12 @@ B-roll ──tag(+AI)──► tags + scores                          │
 - `pipeline/cli.py` — CLI 与阶段编排
 - `pipeline/config.py` — 默认配置与 yaml 合并
 - `pipeline/utils.py` — ffprobe / 抽帧 / 工具
-- `pipeline/stages/*` — 各阶段
+- `pipeline/stages/*` — 各阶段（**静态图动效在 `assemble.py`**）
 - `pipeline/ai/*` — Grok Build AI 产物约定
 - `pipeline/ai_video/*` — Seedance/Dreamina 文生视频 B-roll
 - `scripts/seedance_t2v.py` / `seedance_poll_download.py` — CLI 提交与下载
 - `pipeline/templates/*` — 默认与示例 yaml
+- `docs/IMAGE_MOTION.md` — 静态图 Ken Burns 说明
 
 ## 扩展点
 
@@ -52,4 +58,6 @@ B-roll ──tag(+AI)──► tags + scores                          │
 2. **换匹配打分**：改 `stages/match.py` 的 `_score_broll` / PRIMARY 词表  
 3. **真·多模态 API**：可在 `apply_ai` 前增加自动写 `broll_vlm.json` 的脚本；接口保持 JSON 契约即可  
 4. **AI 视频提供商**：当前仅 `seedance_cli`（本机 dreamina）；新 provider 接在 `pipeline/ai_video/` 即可  
+5. **静态图动效**：调 `assemble.image_motion_*` 或改 `assemble._image_motion_vf`  
+
 
