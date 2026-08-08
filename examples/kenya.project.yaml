@@ -15,6 +15,11 @@ talk:
     - "^这是什么"
     - "也许这就是那瓦湖$"
   pad_between_sec: 0.0
+  # 成片从每个口播文件第一字开口（词级时间戳 + RMS 兜底）
+  trim_leading_silence: true
+  speech_onset_peak_ratio: 0.45
+  speech_onset_min_hold_sec: 0.12
+  trim_leading_only_global_first: false
 
 broll:
   tags_override: {}

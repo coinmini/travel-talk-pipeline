@@ -48,8 +48,8 @@
 | 阶段 | 作用 |
 |------|------|
 | `ingest` | 扫描素材、抽缩略图、分类 talk / broll / final |
-| `transcribe` | 本地 `mlx_whisper` 转写口播 |
-| `clean_vo` | 去口误、按 `sequence` 拼人声；**防句尾重叠** |
+| `transcribe` | 本地 `mlx_whisper` 转写；**词级时间戳**收紧句首/句尾 |
+| `clean_vo` | 去口误、按 `sequence` 拼人声；**对齐第一字开口**；防句尾重叠 |
 | `tag_broll` | 启发式标签（可被 AI 标签覆盖） |
 | `ai_prepare` | 可选：导出缩略图 + 口播文案分析包 |
 | `apply_ai` | 可选：消费 `work/ai/*.json` |
@@ -62,9 +62,19 @@
 ### 音频策略（重要）
 
 - 人声：仅 `voiceover_clean.wav`（由各口播段 `atrim` 精确拼接）
-- **成片从第一个字开口开始**：`clean_vo` 会检测段首真实语音起点，裁掉 Whisper 标进去的前置环境声/BGM
-- 画面：talk / broll 都只出 **无声** 片段再 concat
-- 禁止对 talk 再叠一份源片音轨（否则易出现「最后一句重复」）
+- **成片从第一个字开口开始**（见 `docs/VOICEOVER_ALIGNMENT.md`）：
+  1. `transcribe` 开 `word_timestamps`，用首词/尾词收紧每句  
+  2. `clean_vo` 再对齐；无词级时 RMS 兜底  
+  3. 口播1 / 口播2 各自片头 BGM 都会裁掉，不只处理全片第一句  
+- 画面：talk / broll 都只出 **无声** 片段再 concat  
+- 禁止对 talk 再叠一份源片音轨（否则易出现「最后一句重复」）  
+
+改对齐逻辑后请：
+
+```bash
+python run_pipeline.py run my_trip --stage transcribe --force-transcribe
+python run_pipeline.py run my_trip --from-stage clean_vo
+```
 
 ### 匹配策略（重要）
 
@@ -199,6 +209,8 @@ talk:
   drop_segment_patterns:       # 丢掉口误/废句
     - "^这是什么"
   pad_between_sec: 0.0         # 必须为 0，避免句间静音错位
+  trim_leading_silence: true   # 裁段首 BGM/空白，对齐第一字
+  trim_leading_only_global_first: false  # 每个口播文件都处理
 
 match:
   reuse_broll: false
