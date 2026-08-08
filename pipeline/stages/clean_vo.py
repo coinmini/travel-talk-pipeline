@@ -2,13 +2,98 @@
 
 from __future__ import annotations
 
+import math
 import re
+import struct
+import wave
 from pathlib import Path
 from typing import Any
 
 from ..utils import ensure_dir, run, ts_srt, write_json, write_text
 
 # Path used in _resolve_talk_jobs fuzzy match
+
+
+def _load_mono_pcm16(wav_path: Path) -> tuple[list[int], int]:
+    """Return (samples, sample_rate) mono int16."""
+    with wave.open(str(wav_path), "rb") as w:
+        sr = w.getframerate()
+        ch = w.getnchannels()
+        n = w.getnframes()
+        raw = w.readframes(n)
+        sw = w.getsampwidth()
+    if sw != 2:
+        # fallback: re-read via ffmpeg to 16-bit mono is heavier; skip onset
+        return [], sr
+    samples = list(struct.unpack("<" + "h" * (len(raw) // 2), raw))
+    if ch == 2:
+        samples = samples[0::2]
+    elif ch > 2:
+        samples = samples[0::ch]
+    return samples, sr
+
+
+def detect_speech_onset(
+    wav_path: Path,
+    start_s: float,
+    end_s: float,
+    *,
+    peak_ratio: float = 0.45,
+    min_hold_sec: float = 0.12,
+    abs_floor: float = 1800.0,
+    frame_sec: float = 0.02,
+) -> float:
+    """Return absolute time (sec) of first sustained speech within [start_s, end_s].
+
+    Uses RMS vs segment peak: finds first stretch above max(peak*ratio, abs_floor).
+    If detection fails, returns start_s unchanged.
+    """
+    if not wav_path or not Path(wav_path).exists():
+        return start_s
+    if end_s <= start_s + 0.08:
+        return start_s
+    try:
+        samples, sr = _load_mono_pcm16(Path(wav_path))
+    except Exception:
+        return start_s
+    if not samples or sr <= 0:
+        return start_s
+
+    i0 = max(0, int(start_s * sr))
+    i1 = min(len(samples), int(end_s * sr))
+    if i1 - i0 < int(0.1 * sr):
+        return start_s
+    window = samples[i0:i1]
+    step = max(1, int(sr * frame_sec))
+    rms: list[float] = []
+    for i in range(0, len(window) - step + 1, step):
+        chunk = window[i : i + step]
+        r = math.sqrt(sum(x * x for x in chunk) / len(chunk))
+        rms.append(r)
+    if not rms:
+        return start_s
+    peak = max(rms)
+    if peak < abs_floor * 0.5:
+        return start_s
+    thr = max(peak * float(peak_ratio), float(abs_floor))
+    need = max(1, int(float(min_hold_sec) / frame_sec))
+    run = 0
+    for i, r in enumerate(rms):
+        if r >= thr:
+            run += 1
+            if run >= need:
+                # back up to start of sustained region
+                onset_rel = max(0, i - need + 1) * frame_sec
+                onset_abs = start_s + onset_rel
+                # keep a tiny headroom so first consonant isn't clipped
+                onset_abs = max(start_s, onset_abs - 0.04)
+                # don't eat more than 85% of the segment
+                if onset_abs >= end_s - 0.15:
+                    return start_s
+                return round(onset_abs, 3)
+        else:
+            run = 0
+    return start_s
 
 
 def _in_ranges(t0: float, t1: float, ranges: list[list[float]] | None) -> bool:
@@ -130,10 +215,17 @@ def run_clean_vo(
     # 注意：不能写 `or 0.15`，否则 pad=0.0 会被当成未设置
     _pad_raw = talk_cfg.get("pad_between_sec", 0.0)
     pad = float(0.0 if _pad_raw is None else _pad_raw)
+    # 片头/段首对齐到真正开口（Whisper 常把前置环境声/BGM 算进第一句）
+    trim_leading = bool(talk_cfg.get("trim_leading_silence", True))
+    onset_peak_ratio = float(talk_cfg.get("speech_onset_peak_ratio") or 0.45)
+    onset_hold = float(talk_cfg.get("speech_onset_min_hold_sec") or 0.12)
+    # true=只裁整条 VO 的第一句；false=每个口播文件的第一句都裁
+    trim_only_global_first = bool(talk_cfg.get("trim_leading_only_global_first", False))
 
     timeline: list[dict[str, Any]] = []
     cursor = 0.0
     full_text_parts: list[str] = []
+    onset_trims: list[dict[str, Any]] = []
 
     jobs = _resolve_talk_jobs(transcripts, talk_cfg)
     for job in jobs:
@@ -165,11 +257,47 @@ def run_clean_vo(
             if float(kept[i]["end"]) <= float(kept[i]["start"]) + 0.04:
                 kept[i]["end"] = float(kept[i]["start"]) + 0.05
 
+        # 每个口播文件第一句：裁掉「第一个字之前」的空白/环境声
+        # （整条成片的起始帧 = 全文第一句开口）
+        is_first_job_seg = True
         for seg in kept:
             src_start = float(seg["start"])
             src_end = float(seg["end"])
             if src_end <= src_start + 0.04:
                 continue
+
+            if trim_leading and is_first_job_seg:
+                if (not trim_only_global_first) or (not timeline):
+                    wav_path = Path(talk.get("wav") or "")
+                    if not wav_path.exists():
+                        # 尝试 work/talk/<stem>.wav
+                        wav_path = work_dir / "talk" / f"{talk.get('stem') or Path(name).stem}.wav"
+                    onset = detect_speech_onset(
+                        wav_path,
+                        src_start,
+                        src_end,
+                        peak_ratio=onset_peak_ratio,
+                        min_hold_sec=onset_hold,
+                    )
+                    if onset > src_start + 0.08:
+                        onset_trims.append(
+                            {
+                                "src_name": name,
+                                "text": (seg.get("text") or "")[:40],
+                                "old_start": round(src_start, 3),
+                                "new_start": round(onset, 3),
+                                "trimmed_sec": round(onset - src_start, 3),
+                            }
+                        )
+                        print(
+                            f"  [onset] {name}: first speech {src_start:.2f}s → {onset:.2f}s "
+                            f"(trim {onset - src_start:.2f}s) | {(seg.get('text') or '')[:24]}"
+                        )
+                        src_start = onset
+                is_first_job_seg = False
+            else:
+                is_first_job_seg = False
+
             # 段尾略收 20ms，减少边界把下一句词头带进来
             src_end = max(src_start + 0.05, src_end - 0.02)
             dur = max(0.05, src_end - src_start)
@@ -292,7 +420,12 @@ def run_clean_vo(
         "captions_zh_srt": str(srt_path),
         "timeline": timeline,
         "full_text": "\n".join(full_text_parts),
+        "trim_leading_silence": trim_leading,
+        "speech_onset_trims": onset_trims,
     }
     write_json(work_dir / "voiceover.json", result)
     print(f"  cleaned VO: {len(timeline)} segments, {total:.1f}s")
+    if onset_trims:
+        tsum = sum(float(x.get("trimmed_sec") or 0) for x in onset_trims)
+        print(f"  speech onset trims: {len(onset_trims)} file(s), -{tsum:.2f}s leading non-speech")
     return result

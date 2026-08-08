@@ -16,6 +16,10 @@ talk:
     - "^这是什么"
     - "也许这就是那瓦湖$"
   pad_between_sec: 0.0
+  # 成片从口播第一个字开始（裁段首空白/环境声）
+  trim_leading_silence: true
+  speech_onset_peak_ratio: 0.45
+  speech_onset_min_hold_sec: 0.12
 
 broll:
   min_clip_sec: 1.6

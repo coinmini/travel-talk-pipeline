@@ -43,6 +43,12 @@ DEFAULTS: dict[str, Any] = {
         ],
         # 相邻段间隔（秒），拼 VO 时加一点呼吸
         "pad_between_sec": 0.0,
+        # 成片从「第一个字」开口开始：裁掉 Whisper 段首的环境声/BGM
+        "trim_leading_silence": True,
+        "speech_onset_peak_ratio": 0.45,
+        "speech_onset_min_hold_sec": 0.12,
+        # False=每个口播文件第一句都裁；True=仅整条时间线第一句
+        "trim_leading_only_global_first": False,
     },
     "broll": {
         # 单镜目标时长范围
