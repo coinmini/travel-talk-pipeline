@@ -258,19 +258,31 @@ def run_clean_vo(
                 kept[i]["end"] = float(kept[i]["start"]) + 0.05
 
         # 每个口播文件第一句：裁掉「第一个字之前」的空白/环境声
-        # （整条成片的起始帧 = 全文第一句开口）
+        # 最后一句：段尾加留白，避免最后一个字被裁断
         is_first_job_seg = True
-        for seg in kept:
+        file_dur = float(talk.get("duration") or 0) or None
+        if file_dur is None or file_dur <= 0:
+            try:
+                from ..utils import media_info
+
+                file_dur = float(media_info(Path(talk["path"])).get("duration") or 0) or None
+            except Exception:
+                file_dur = None
+        tail_pad = float(talk_cfg.get("segment_tail_pad_sec") or 0.15)
+
+        for seg_i, seg in enumerate(kept):
             src_start = float(seg["start"])
             src_end = float(seg["end"])
             if src_end <= src_start + 0.04:
                 continue
+            is_last_job_seg = seg_i == len(kept) - 1
 
             # 优先用 Whisper 词级时间戳（transcribe 已写入 words）
             words = seg.get("words") or []
             if words:
                 try:
                     w0 = float(words[0].get("start"))
+                    w1 = float(words[-1].get("end"))
                     # 已在 transcribe 收紧过 start；此处再保险一次
                     if w0 > src_start + 0.05:
                         onset_trims.append(
@@ -288,6 +300,8 @@ def run_clean_vo(
                             f"| {(seg.get('text') or '')[:24]}"
                         )
                         src_start = max(0.0, w0 - 0.04)
+                    # 词尾 + 留白，避免末字被切
+                    src_end = max(src_end, w1 + (tail_pad if is_last_job_seg else 0.08))
                 except (TypeError, ValueError, KeyError, IndexError):
                     pass
 
@@ -322,8 +336,27 @@ def run_clean_vo(
                         src_start = onset
             is_first_job_seg = False
 
-            # 段尾略收 20ms，减少边界把下一句词头带进来
-            src_end = max(src_start + 0.05, src_end - 0.02)
+            # 非末句：不超过下一句 start，略收 10ms 防咬字
+            if not is_last_job_seg and seg_i + 1 < len(kept):
+                next_start = float(kept[seg_i + 1]["start"])
+                if words and kept[seg_i + 1].get("words"):
+                    try:
+                        next_start = min(
+                            next_start, float(kept[seg_i + 1]["words"][0]["start"])
+                        )
+                    except (TypeError, ValueError, KeyError, IndexError):
+                        pass
+                src_end = min(src_end, next_start)
+                src_end = max(src_start + 0.05, src_end - 0.01)
+            else:
+                # 末句：加尾部留白，夹在文件时长内
+                src_end = src_end + 0.0  # already padded via words above
+                if is_last_job_seg:
+                    src_end = src_end + (0.0 if words else tail_pad)
+                if file_dur and file_dur > 0:
+                    src_end = min(src_end, float(file_dur) - 0.02)
+                src_end = max(src_start + 0.05, src_end)
+
             dur = max(0.05, src_end - src_start)
             text = (seg.get("text") or "").strip()
             item = {

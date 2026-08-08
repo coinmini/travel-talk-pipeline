@@ -42,7 +42,11 @@ talk:
   speech_onset_min_hold_sec: 0.12
   # false=每个口播文件第一句都做 RMS 兜底；true=仅整片第一句
   trim_leading_only_global_first: false
+  # 末字留白，避免「自己」等收尾被 atrim 切半
+  segment_tail_pad_sec: 0.15
 ```
+
+**尾部**：词级 `end` 往往偏紧；`transcribe` 默认 +120ms，`clean_vo` 对每文件最后一句再按 `segment_tail_pad_sec` 放宽，并夹在文件时长内。
 
 ## 重跑命令
 
