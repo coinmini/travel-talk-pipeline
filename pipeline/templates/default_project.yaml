@@ -1,0 +1,46 @@
+# 旅拍口播流水线 · 默认配置（可被项目内 project.yaml 覆盖）
+style: travel_talk
+
+output:
+  width: 1080
+  height: 1920
+  fps: 30
+  video_bitrate: "6M"
+  audio_bitrate: "192k"
+
+talk:
+  name_keywords: ["口播", "talk", "vo"]
+  order: []
+  ranges: {}
+  drop_segment_patterns:
+    - "^这是什么"
+    - "也许这就是那瓦湖$"
+  pad_between_sec: 0.0
+
+broll:
+  min_clip_sec: 1.6
+  max_clip_sec: 4.0
+  photo_duration_sec: 3.0
+  prefer_vertical: true
+  tags_override: {}
+
+match:
+  reuse_broll: false
+  max_reuse: 1
+  # 低露脸 + 单句单镜（便于口播关键词对齐画面）
+  target_face_ratio: 0.12
+  force_face_open_segments: 1
+  force_face_close_segments: 1
+  broll_pack_max_sec: 4.5
+  broll_pack_max_segments: 1
+
+export:
+  burn_subtitles: true
+  subtitle_font: "PingFang SC"
+  subtitle_fontsize: 42
+  subtitle_margin_v: 160
+  include_english_stub: true
+
+whisper:
+  model: "mlx-community/whisper-large-v3-mlx"
+  language: zh

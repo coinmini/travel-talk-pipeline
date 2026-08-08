@@ -1,0 +1,31 @@
+# 复制到素材目录并改名为 project.yaml
+title: 纳瓦沙湖
+target_duration_sec: 0
+
+# 推荐：sequence 精细控制口播顺序（同一文件可拆多段、可重复出现）
+talk:
+  sequence:
+    - { file: 口播素材3.mp4, start: 0.9 }           # 钩子 + 地点
+    - { file: 口播素材1.mp4, start: 0, end: 17.4 }  # 诗意空镜旁白
+    - { file: 口播素材4.mp4 }                        # 体验
+    - { file: 口播素材2.mp4 }                        # 感悟
+    - { file: 口播素材1.mp4, start: 21.3 }          # 升华 + CTA
+  drop_segment_patterns:
+    - "^这是什么"
+    - "也许这就是那瓦湖$"
+
+  # 简单模式也可用 order（整段拼接，不拆分）：
+  # order:
+  #   - 口播素材3.mp4
+  #   - 口播素材4.mp4
+  #   - 口播素材2.mp4
+  #   - 口播素材1.mp4
+
+# 人工纠正 B-roll 标签（比自动启发式更准，强烈建议补）
+broll:
+  tags_override:
+    # c44e48caf16fb811d52537f94a9adc10.mp4: ["河马", "湖面"]
+    # 6a95e160b1cc66b53903b486bcac8729.mp4: ["船", "自拍", "救生衣"]
+
+export:
+  burn_subtitles: true

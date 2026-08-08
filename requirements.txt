@@ -1,0 +1,13 @@
+# Core
+PyYAML>=6.0
+numpy>=1.24
+opencv-python-headless>=4.8
+Pillow>=10.0
+
+# ASR (Apple Silicon recommended)
+# Install with: pip install mlx mlx-whisper
+# or use conda env that already has mlx_whisper
+mlx-whisper>=0.4.0
+
+# Optional: only if you wire other OpenAI-compatible clients yourself
+# openai>=1.0

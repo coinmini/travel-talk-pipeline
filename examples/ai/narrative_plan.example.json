@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "source": "grok-build",
+  "target_face_ratio": 0.12,
+  "force_face_texts": [
+    "提到肯尼亚",
+    "评论区告诉我"
+  ],
+  "prefer_broll_texts": [
+    "水鸟",
+    "河马",
+    "飞翔",
+    "飞过",
+    "倒映",
+    "乘船",
+    "小船"
+  ],
+  "sequence_suggestion": [],
+  "notes": "开场钩子+结尾CTA露脸；景物句必须盖对应标签 B-roll"
+}

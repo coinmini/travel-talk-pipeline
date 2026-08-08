@@ -1,0 +1,40 @@
+# 示例：肯尼亚 · 纳瓦沙湖 旅拍口播配置
+# 复制到素材目录并改名为 project.yaml
+title: 肯尼亚纳瓦沙湖
+
+talk:
+  # 叙事顺序：钩子介绍 → 诗意 → 乘船 → 感悟 → 升华 CTA
+  # 同一口播可拆前后半（sequence 支持重复 file + start/end）
+  sequence:
+    - { file: 口播素材3.mp4, start: 0.9 }
+    - { file: 口播素材1.mp4, start: 0, end: 17.4 }
+    - { file: 口播素材4.mp4 }
+    - { file: 口播素材2.mp4 }
+    - { file: 口播素材1.mp4, start: 21.3 }
+  drop_segment_patterns:
+    - "^这是什么"
+    - "也许这就是那瓦湖$"
+  pad_between_sec: 0.0
+
+broll:
+  tags_override: {}
+  min_clip_sec: 1.5
+  max_clip_sec: 4.0
+
+match:
+  reuse_broll: false
+  max_reuse: 1
+  # 目标露脸占比（实际受「无脸空镜总时长」硬约束）
+  target_face_ratio: 0.12
+  force_face_open_segments: 1
+  force_face_close_segments: 1
+  # 单句单镜，便于口播关键词对齐画面
+  broll_pack_max_sec: 4.5
+  broll_pack_max_segments: 1
+
+export:
+  burn_subtitles: true
+
+ai:
+  enabled: false
+  provider: grok-build

@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "source": "grok-build",
+  "items": [
+    {
+      "name": "example_hippo.mp4",
+      "tags": ["河马", "湖面", "水面", "空镜"],
+      "score": 9.0,
+      "shake": 0.2,
+      "face": false,
+      "note": "水面河马，盖「河马」口播首选"
+    },
+    {
+      "name": "example_selfie_boat.mp4",
+      "tags": ["自拍", "出镜", "人脸", "船", "救生衣", "乘船"],
+      "score": 5.5,
+      "shake": 0.3,
+      "face": true,
+      "note": "船上自拍，盖画价值低"
+    }
+  ]
+}
