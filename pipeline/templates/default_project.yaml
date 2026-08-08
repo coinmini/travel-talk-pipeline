@@ -47,6 +47,8 @@ export:
   subtitle_fontsize: 42
   subtitle_margin_v: 160
   include_english_stub: true
+  # 多个口播文件时拆成独立 package（work/package_by_talk/<口播名>/）
+  split_by_talk: true
 
 # 静态图盖画：推近/拉远/平移（Ken Burns）
 assemble:

@@ -193,6 +193,10 @@ python run_pipeline.py run my_trip --from-stage apply_ai
 # 强制重转写
 python run_pipeline.py run my_trip --stage transcribe --force-transcribe
 python run_pipeline.py run my_trip --from-stage clean_vo
+
+# 多口播源：拆成独立 package（需已 assemble）
+python run_pipeline.py split-package my_trip
+# → work/package_by_talk/<口播文件名>/
 ```
 
 ---
@@ -241,6 +245,11 @@ my_trip/work/
     voiceover_clean.wav
     captions_zh.srt
     roughcut.mp4
+  package_by_talk/             # 多口播源时自动拆成独立包
+    口播1/
+      clips/ roughcut.mp4 voiceover_clean.wav ...
+    口播2/
+      ...
   ai/                          # --ai 时生成
     AGENT_PROMPT.md
     pack/thumbs/

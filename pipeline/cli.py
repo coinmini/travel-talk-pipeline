@@ -264,36 +264,64 @@ def run_pipeline(
         results["assemble"] = run_assemble(picture_plan, voiceover, work_dir, cfg)
 
     if "package" in selected:
-        from .stages.export_package import run_export_package
+        from .stages.export_package import run_export_package, run_export_split_by_talk
 
         banner("package")
+        picture_plan = (
+            read_json(work_dir / "picture_plan.json")
+            if (work_dir / "picture_plan.json").exists()
+            else results.get("match") or _load_stage(work_dir, "match")
+        )
+        voiceover = results.get("clean_vo") or _load_stage(work_dir, "clean_vo")
+        asset_index = results.get("ingest") or _load_stage(work_dir, "ingest")
+        assemble = results.get("assemble") or (
+            _load_stage(work_dir, "assemble")
+            if (work_dir / "assemble.json").exists()
+            else None
+        )
+        broll_tags = (
+            read_json(work_dir / "broll_tags.json")
+            if (work_dir / "broll_tags.json").exists()
+            else None
+        )
         results["package"] = run_export_package(
             project_dir,
             work_dir,
             cfg,
-            asset_index=results.get("ingest") or _load_stage(work_dir, "ingest"),
-            voiceover=results.get("clean_vo") or _load_stage(work_dir, "clean_vo"),
-            picture_plan=(
-            read_json(work_dir / "picture_plan.json")
-            if (work_dir / "picture_plan.json").exists()
-            else results.get("match") or _load_stage(work_dir, "match")
-        ),
-            assemble=results.get("assemble")
-            or (
-                _load_stage(work_dir, "assemble")
-                if (work_dir / "assemble.json").exists()
-                else None
-            ),
-            broll_tags=read_json(work_dir / "broll_tags.json")
-            if (work_dir / "broll_tags.json").exists()
-            else None,
+            asset_index=asset_index,
+            voiceover=voiceover,
+            picture_plan=picture_plan,
+            assemble=assemble,
+            broll_tags=broll_tags,
         )
+        # 多口播源：默认拆成独立 package（可 project.yaml export.split_by_talk: false 关闭）
+        split_by_talk = bool((cfg.get("export") or {}).get("split_by_talk", True))
+        talk_names = {
+            str(s.get("src_name") or "")
+            for s in (voiceover.get("timeline") or [])
+            if s.get("src_name")
+        }
+        if split_by_talk and len(talk_names) >= 2:
+            banner("package_by_talk (split per 口播)")
+            results["package_by_talk"] = run_export_split_by_talk(
+                project_dir,
+                work_dir,
+                cfg,
+                asset_index=asset_index,
+                voiceover=voiceover,
+                picture_plan=picture_plan,
+                assemble=assemble,
+                broll_tags=broll_tags,
+            )
 
     print("\n✓ pipeline done")
     if results.get("assemble"):
         print(f"  roughcut: {results['assemble'].get('roughcut')}")
     if results.get("package"):
         print(f"  package:  {results['package'].get('package_dir')}")
+    if results.get("package_by_talk"):
+        for p in results["package_by_talk"].get("packages") or []:
+            print(f"  package_by_talk: {p.get('package_dir')} ({p.get('duration')}s)")
     return results
 
 
@@ -335,6 +363,14 @@ def build_parser() -> argparse.ArgumentParser:
     init_p.add_argument("project", type=str)
     init_p.add_argument("--title", type=str, default=None)
 
+    split_p = sub.add_parser(
+        "split-package",
+        help="按口播源文件拆成多个独立 package（需已有 clean_vo/match/assemble）",
+    )
+    split_p.add_argument("project", type=str)
+    split_p.add_argument("--work", type=str, default=None)
+    split_p.add_argument("--config", type=str, default=None)
+
     sub.add_parser("stages", help="列出阶段")
 
     return p
@@ -358,6 +394,40 @@ def main(argv: list[str] | None = None) -> int:
         path = init_project_yaml(Path(args.project), title=args.title)
         print(f"wrote {path}")
         return 0
+
+    if args.cmd == "split-package":
+        from .stages.export_package import run_export_split_by_talk
+
+        project = Path(args.project)
+        cfg = load_project_config(
+            project, Path(args.config) if args.config else None
+        )
+        work_dir = _work_dir(project, args.work)
+        try:
+            result = run_export_split_by_talk(
+                project,
+                work_dir,
+                cfg,
+                asset_index=_load_stage(work_dir, "ingest"),
+                voiceover=_load_stage(work_dir, "clean_vo"),
+                picture_plan=read_json(work_dir / "picture_plan.json"),
+                assemble=(
+                    _load_stage(work_dir, "assemble")
+                    if (work_dir / "assemble.json").exists()
+                    else None
+                ),
+                broll_tags=(
+                    read_json(work_dir / "broll_tags.json")
+                    if (work_dir / "broll_tags.json").exists()
+                    else None
+                ),
+            )
+            for p in result.get("packages") or []:
+                print(f"✓ {p.get('package_dir')}  ({p.get('duration')}s)")
+            return 0
+        except Exception as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 1
 
     if args.cmd == "run":
         project = Path(args.project)

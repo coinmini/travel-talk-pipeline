@@ -148,6 +148,8 @@ DEFAULTS: dict[str, Any] = {
         "subtitle_fontsize": 42,
         "subtitle_margin_v": 160,
         "include_english_stub": True,
+        # 多口播源时，package 阶段额外输出 work/package_by_talk/<口播名>/
+        "split_by_talk": True,
     },
     # 静态图 B-roll：Ken Burns 推拉/平移，避免呆板定格
     "assemble": {
