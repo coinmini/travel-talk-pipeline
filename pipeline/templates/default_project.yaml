@@ -29,7 +29,8 @@ match:
   max_reuse: 1
   # 低露脸 + 单句单镜（便于口播关键词对齐画面）
   target_face_ratio: 0.12
-  force_face_open_segments: 1
+  # 开场主角先出镜（句数；不受单句时长限制）
+  force_face_open_segments: 2
   force_face_close_segments: 1
   broll_pack_max_sec: 4.5
   broll_pack_max_segments: 1

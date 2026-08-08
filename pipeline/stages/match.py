@@ -441,6 +441,26 @@ def run_match(
     # assignments[i] = piece dict or None
     assignments: list[dict | None] = [None] * n
 
+    # -------- Pass 0: 开场/收尾/金句强制露脸（主角必须先出镜）--------
+    # 不设时长上限：首句口播经常 >5s，旧逻辑会因此整句被 B-roll 顶掉。
+    force_face_idx: set[int] = set()
+    open_n = max(0, int(force_face_open))
+    close_n = max(0, int(force_face_close))
+    for i in range(min(open_n, n)):
+        force_face_idx.add(i)
+    for i in range(max(0, n - close_n), n):
+        force_face_idx.add(i)
+    for m in meta:
+        if _text_hit(m["text"], force_face_texts):
+            force_face_idx.add(m["i"])
+
+    for i in sorted(force_face_idx):
+        m = meta[i]
+        assignments[i] = make_talk_piece(m["seg"], m["keys"], m["stage_id"])
+        print(
+            f"  [P0 face] #{i} force talk | {(m['text'] or '')[:32]}"
+        )
+
     # -------- Pass 1: 主体景物句优先（河马/水鸟/倒影/船…）--------
     def _p1_rank(m: dict) -> tuple:
         pk = primary_keys(m["keys"])
@@ -463,6 +483,8 @@ def run_match(
         key=_p1_rank,
     )
     for m in strong_order:
+        if assignments[m["i"]] is not None:
+            continue  # 已强制露脸的句不再被 P1 B-roll 抢走
         pk = primary_keys(m["keys"])
         # 仅有「树」的弱强词不进 P1 抢镜头
         if not pk and m["strong"] == ["树"]:
@@ -481,7 +503,9 @@ def run_match(
 
     # -------- Pass 2: 未分配句按「时长从长到短」贪心盖画，短 B-roll 留给短句 --------
     full_dur = sum(m["dur"] for m in meta) or 1.0
-    face_dur = 0.0
+    face_dur = sum(
+        float(meta[i]["dur"]) for i in force_face_idx if 0 <= i < n
+    )
 
     pending = [m for m in meta if assignments[m["i"]] is None]
     # 长句优先用长空镜，避免只剩短 B-roll 时被迫整段露脸
@@ -496,16 +520,9 @@ def run_match(
         stage_id = m["stage_id"]
         face_share = face_dur / full_dur
 
-        # 默认全部盖画；仅开场/CTA 短句强制露脸（无主体词时）
+        # 默认盖画；开场/收尾/金句已在 P0 强制露脸
         hard_face = False
         pk = primary_keys(keys)
-        if not pk:
-            if i == 0 and force_face_open > 0 and dur <= 5.0:
-                hard_face = True
-            if i >= n - max(1, force_face_close) and dur <= 6.0:
-                hard_face = True
-            if _text_hit(text, force_face_texts) and dur <= 6.0:
-                hard_face = True
 
         piece = None
         if not hard_face and broll_available():
