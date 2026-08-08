@@ -268,7 +268,7 @@ def run_clean_vo(
                 file_dur = float(media_info(Path(talk["path"])).get("duration") or 0) or None
             except Exception:
                 file_dur = None
-        tail_pad = float(talk_cfg.get("segment_tail_pad_sec") or 0.15)
+        tail_pad = float(talk_cfg.get("segment_tail_pad_sec") or 0.35)
 
         for seg_i, seg in enumerate(kept):
             src_start = float(seg["start"])

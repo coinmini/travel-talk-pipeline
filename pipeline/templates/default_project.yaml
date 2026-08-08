@@ -21,7 +21,7 @@ talk:
   speech_onset_peak_ratio: 0.45
   speech_onset_min_hold_sec: 0.12
   trim_leading_only_global_first: false  # 每个口播文件第一句都处理
-  segment_tail_pad_sec: 0.15             # 末字留白，防裁断
+  segment_tail_pad_sec: 0.35             # 末字留白，防裁断
 
 broll:
   min_clip_sec: 1.6

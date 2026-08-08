@@ -61,12 +61,12 @@ def transcribe_wav(wav_path: Path, model: str, language: str) -> dict[str, Any]:
             end = float(words_out[-1]["end"])
             # 段首略留 40ms，避免切掉声母
             start = max(0.0, start - 0.04)
-            # 段尾略放 120ms，避免最后一个字被切半（词 end 常偏紧）
-            end = end + 0.12
-            # 不超过原句级 end 过多（+0.35s 上限），留给 clean_vo 再按文件时长夹紧
+            # 段尾放宽：词 end 常偏紧，「自己」等收尾易被切掉
+            end = end + 0.20
+            # 不超过原句级 end 过多，留给 clean_vo 再按文件时长夹紧
             try:
                 seg_end = float(seg["end"])
-                end = min(end, seg_end + 0.35)
+                end = min(end, seg_end + 0.50)
             except (TypeError, ValueError, KeyError):
                 pass
             if end <= start + 0.05:

@@ -507,6 +507,18 @@ def run_export_split_by_talk(
                     str(video_only),
                 ]
             )
+            # 以人声为准：画面短则冻尾帧补齐，绝不 -shortest 裁掉末字
+            from ..utils import media_info as _media_info
+
+            v_dur = float(_media_info(video_only).get("duration") or 0)
+            a_dur = float(_media_info(local_vo).get("duration") or 0)
+            vpad = max(0.0, a_dur - v_dur + 0.05)
+            if vpad > 0.04:
+                fc = f"[0:v]tpad=stop_mode=clone:stop_duration={vpad:.3f}[v]"
+                map_v = "[v]"
+                filt = ["-filter_complex", fc, "-map", map_v, "-map", "1:a:0"]
+            else:
+                filt = ["-map", "0:v:0", "-map", "1:a:0"]
             run(
                 [
                     "ffmpeg",
@@ -515,17 +527,19 @@ def run_export_split_by_talk(
                     str(video_only),
                     "-i",
                     str(local_vo),
-                    "-map",
-                    "0:v:0",
-                    "-map",
-                    "1:a:0",
+                    *filt,
                     "-c:v",
-                    "copy",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-b:v",
+                    v_br,
                     "-c:a",
                     "aac",
                     "-b:a",
                     a_br,
-                    "-shortest",
+                    "-t",
+                    f"{max(a_dur, v_dur):.3f}",
                     "-movflags",
                     "+faststart",
                     str(rough),
