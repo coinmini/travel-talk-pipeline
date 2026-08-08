@@ -128,6 +128,7 @@ DEFAULTS: dict[str, Any] = {
         },
         "reuse_broll": False,
         "max_reuse": 1,
+        "max_reuse_image": 1,  # 静态图永不复用（独立于视频 max_reuse）
         # 旅拍默认低露脸，大量盖画；但开场必须主角露脸
         "target_face_ratio": 0.12,
         "force_face_open_segments": 2,  # 前 N 句强制 talk（不受时长上限）

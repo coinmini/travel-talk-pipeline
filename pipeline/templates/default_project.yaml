@@ -27,6 +27,7 @@ broll:
 match:
   reuse_broll: false
   max_reuse: 1
+  max_reuse_image: 1   # 静态图禁止复用
   # 低露脸 + 单句单镜（便于口播关键词对齐画面）
   target_face_ratio: 0.12
   # 开场主角先出镜（句数；不受单句时长限制）

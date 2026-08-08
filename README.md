@@ -201,7 +201,8 @@ talk:
 
 match:
   reuse_broll: false
-  max_reuse: 1                 # 改 2 可显著降低露脸（空镜可复用）
+  max_reuse: 1                 # 视频 B-roll 最多用几次
+  max_reuse_image: 1           # 静态图永不复用（独立于 max_reuse）
   target_face_ratio: 0.12      # 目标露脸；受空镜总时长硬约束
   force_face_open_segments: 2  # 开场前 N 句强制主角露脸
   broll_pack_max_segments: 1   # 单句单镜，语义更好对齐

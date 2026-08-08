@@ -155,8 +155,11 @@ def _tag_hit(tags: set[str], key: str, aliases: dict[str, list[str]]) -> bool:
         syns = {"河马", "海马"}  # 露出耳/眼 → 河马镜头
     elif key in ("水鸟", "鸟", "飞翔", "飞过"):
         syns = {"水鸟", "鸟"}
-    elif key in ("船", "乘船", "小船", "渔船"):
-        syns = {"船", "乘船", "救生衣", "小船", "渔船", "渔民"}
+    elif key in ("船", "乘船", "小船"):
+        # 不含「渔船/渔民」，避免普通海景船图抢「渔民」槽
+        syns = {"船", "乘船", "救生衣", "小船"}
+    elif key in ("渔船",):
+        syns = {"渔船", "渔民", "码头"}
     elif key in ("倒影",):
         syns = {"倒影", "树", "空镜", "风景"}
     elif key in ("树",):
@@ -170,7 +173,8 @@ def _tag_hit(tags: set[str], key: str, aliases: dict[str, list[str]]) -> bool:
     elif key in ("游泳", "滑梯", "滑板", "滑墙板", "水上"):
         syns = {"游泳", "滑梯", "冲浪", "滑板", "水上", "玩水", "海"}
     elif key in ("渔民", "收获"):
-        syns = {"渔民", "渔船", "码头", "船"}
+        # 必须真渔民/码头，禁止普通海景+船顶替
+        syns = {"渔民", "渔船", "码头", "收获"}
     elif key in ("青山", "山"):
         syns = {"山", "青山", "风景", "空镜"}
     elif key in ("展会", "讲会", "展位"):
@@ -309,6 +313,10 @@ def run_match(
     max_reuse = int(mcfg.get("max_reuse") or 1)
     if not reuse_broll:
         max_reuse = 1
+    # 静态图默认永不复用（即使视频允许 max_reuse>1）
+    max_reuse_image = int(mcfg.get("max_reuse_image") or 1)
+    if max_reuse_image < 1:
+        max_reuse_image = 1
     target_face = float(mcfg.get("target_face_ratio") or default_face)
     force_face_open = int(mcfg.get("force_face_open_segments") or 1)
     force_face_close = int(mcfg.get("force_face_close_segments") or 1)
@@ -341,16 +349,52 @@ def run_match(
                 b["highlight_score"] = float(hs_map[b["name"]])
             except (TypeError, ValueError):
                 pass
+        # 统一 path key，避免相对/绝对路径算成两份
+        try:
+            b["path"] = str(Path(b["path"]).resolve())
+        except Exception:
+            b["path"] = str(b.get("path") or "")
+        name = str(b.get("name") or Path(b["path"]).name)
+        b["name"] = name
+        if b.get("kind") is None:
+            ext = Path(name).suffix.lower()
+            b["kind"] = "image" if ext in {".jpg", ".jpeg", ".png", ".webp", ".heic"} else "video"
 
     use_count: dict[str, int] = {}
     vo_timeline = list(voiceover.get("timeline") or [])
     n = len(vo_timeline)
 
+    def _path_key(path: str) -> str:
+        try:
+            return str(Path(path).resolve())
+        except Exception:
+            return str(path)
+
+    def _is_image_broll(b: dict) -> bool:
+        if b.get("kind") == "image":
+            return True
+        return Path(str(b.get("name") or b.get("path") or "")).suffix.lower() in {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".webp",
+            ".heic",
+        }
+
+    def _limit_for(b: dict) -> int:
+        return max_reuse_image if _is_image_broll(b) else max_reuse
+
     def broll_available() -> list[dict]:
-        return [b for b in brolls if use_count.get(b["path"], 0) < max_reuse]
+        out = []
+        for b in brolls:
+            key = _path_key(b["path"])
+            if use_count.get(key, 0) < _limit_for(b):
+                out.append(b)
+        return out
 
     def consume(path: str) -> None:
-        use_count[path] = use_count.get(path, 0) + 1
+        key = _path_key(path)
+        use_count[key] = use_count.get(key, 0) + 1
 
     def choose_broll(
         keys: list[str],
@@ -368,6 +412,9 @@ def run_match(
             )
             if sc is None:
                 continue
+            # 轻微偏好尚未用过的静态图（扩大多样性）
+            if _is_image_broll(b) and use_count.get(_path_key(b["path"]), 0) == 0:
+                sc += 0.15
             scored.append((sc, b))
         if not scored:
             return None
@@ -541,6 +588,84 @@ def run_match(
 
     picture_timeline = [a for a in assignments if a is not None]
 
+    # -------- 终检：B-roll / 静态图硬去重（max_reuse / max_reuse_image）--------
+    by_path: dict[str, list[int]] = {}
+    for idx, p in enumerate(picture_timeline):
+        if p.get("type") != "broll":
+            continue
+        key = _path_key(str(p.get("src") or ""))
+        by_path.setdefault(key, []).append(idx)
+
+    broll_by_path = {_path_key(b["path"]): b for b in brolls}
+    fixed_reuse = 0
+    for key, idxs in list(by_path.items()):
+        bmeta = broll_by_path.get(key) or {}
+        limit = max_reuse_image if (
+            Path(key).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".heic"}
+            or bmeta.get("kind") == "image"
+        ) else max_reuse
+        if len(idxs) <= limit:
+            continue
+        # 保留前 limit 次，后续强制换素材或改 talk
+        for idx in idxs[limit:]:
+            p = picture_timeline[idx]
+            keys = list(p.get("match_keys") or [])
+            need = float(p.get("duration") or 1.0)
+            # 临时把当前 path 记满，迫使 choose 换人
+            use_count[key] = max(use_count.get(key, 0), limit)
+            alt = choose_broll(keys, need, require_strong=bool(primary_keys(keys)))
+            if alt is None:
+                alt = choose_broll([], need, require_strong=False)
+            if alt is not None and _path_key(alt["path"]) != key:
+                seg_like = {
+                    "timeline_start": p["timeline_start"],
+                    "timeline_end": p["timeline_end"],
+                    "duration": p["duration"],
+                    "text": p.get("text") or "",
+                    "src": p.get("src"),
+                    "src_name": p.get("src_name"),
+                    "src_start": p.get("src_start"),
+                    "src_end": p.get("src_end"),
+                }
+                new_p = make_broll_piece(seg_like, alt, keys, p.get("stage") or "body")
+                picture_timeline[idx] = new_p
+                consume(alt["path"])
+                fixed_reuse += 1
+                print(
+                    f"  [dedupe] #{idx} reuse {Path(key).name} → {alt['name'][:28]}"
+                )
+            else:
+                # 无替补：改露脸，避免静图/镜头重复
+                seg_like = {
+                    "timeline_start": p["timeline_start"],
+                    "timeline_end": p["timeline_end"],
+                    "duration": p["duration"],
+                    "text": p.get("text") or "",
+                    "src": p.get("src"),
+                    "src_name": p.get("src_name"),
+                    "src_start": p.get("src_start") or 0,
+                    "src_end": p.get("src_end") or p.get("duration") or 1,
+                }
+                # 尽量从 voiceover 段找回 talk 源
+                vo_seg = None
+                for vs in vo_timeline:
+                    if abs(float(vs.get("timeline_start", -1)) - float(p["timeline_start"])) < 0.05:
+                        vo_seg = vs
+                        break
+                if vo_seg is not None:
+                    picture_timeline[idx] = make_talk_piece(
+                        vo_seg, keys, p.get("stage") or "body"
+                    )
+                    fixed_reuse += 1
+                    print(f"  [dedupe] #{idx} reuse {Path(key).name} → talk (no alt)")
+
+    if fixed_reuse:
+        # 重建 use_count 供 stats
+        use_count = {}
+        for p in picture_timeline:
+            if p.get("type") == "broll":
+                consume(str(p.get("src") or ""))
+
     # 微间隙
     if picture_timeline:
         for idx in range(1, len(picture_timeline)):
@@ -586,6 +711,8 @@ def run_match(
         "broll_usage": {Path(k).name: v for k, v in use_count.items()},
         "reuse_broll": reuse_broll,
         "max_reuse": max_reuse,
+        "max_reuse_image": max_reuse_image,
+        "dedupe_fixed": fixed_reuse,
         "broll_pool": len(brolls),
         "broll_used": len(use_count),
         "broll_left": len(brolls) - len(use_count),
