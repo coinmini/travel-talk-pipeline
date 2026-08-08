@@ -266,11 +266,36 @@ def run_clean_vo(
             if src_end <= src_start + 0.04:
                 continue
 
-            if trim_leading and is_first_job_seg:
+            # 优先用 Whisper 词级时间戳（transcribe 已写入 words）
+            words = seg.get("words") or []
+            if words:
+                try:
+                    w0 = float(words[0].get("start"))
+                    # 已在 transcribe 收紧过 start；此处再保险一次
+                    if w0 > src_start + 0.05:
+                        onset_trims.append(
+                            {
+                                "src_name": name,
+                                "text": (seg.get("text") or "")[:40],
+                                "old_start": round(src_start, 3),
+                                "new_start": round(max(0.0, w0 - 0.04), 3),
+                                "trimmed_sec": round(w0 - src_start, 3),
+                                "method": "word_ts",
+                            }
+                        )
+                        print(
+                            f"  [onset/words] {name}: {src_start:.2f}s → {w0:.2f}s "
+                            f"| {(seg.get('text') or '')[:24]}"
+                        )
+                        src_start = max(0.0, w0 - 0.04)
+                except (TypeError, ValueError, KeyError, IndexError):
+                    pass
+
+            # 每个口播文件第一句：若无词级时间戳，回退 RMS 检测
+            if trim_leading and is_first_job_seg and not words:
                 if (not trim_only_global_first) or (not timeline):
                     wav_path = Path(talk.get("wav") or "")
                     if not wav_path.exists():
-                        # 尝试 work/talk/<stem>.wav
                         wav_path = work_dir / "talk" / f"{talk.get('stem') or Path(name).stem}.wav"
                     onset = detect_speech_onset(
                         wav_path,
@@ -287,16 +312,15 @@ def run_clean_vo(
                                 "old_start": round(src_start, 3),
                                 "new_start": round(onset, 3),
                                 "trimmed_sec": round(onset - src_start, 3),
+                                "method": "rms",
                             }
                         )
                         print(
-                            f"  [onset] {name}: first speech {src_start:.2f}s → {onset:.2f}s "
+                            f"  [onset/rms] {name}: first speech {src_start:.2f}s → {onset:.2f}s "
                             f"(trim {onset - src_start:.2f}s) | {(seg.get('text') or '')[:24]}"
                         )
                         src_start = onset
-                is_first_job_seg = False
-            else:
-                is_first_job_seg = False
+            is_first_job_seg = False
 
             # 段尾略收 20ms，减少边界把下一句词头带进来
             src_end = max(src_start + 0.05, src_end - 0.02)

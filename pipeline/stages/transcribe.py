@@ -24,7 +24,8 @@ def transcribe_wav(wav_path: Path, model: str, language: str) -> dict[str, Any]:
         str(wav_path),
         path_or_hf_repo=model,
         language=language,
-        word_timestamps=False,
+        # 词级时间戳：用于把句首/句尾对齐到真正开口/收尾（去掉段前 BGM/空白）
+        word_timestamps=True,
         verbose=False,
     )
     segments = []
@@ -32,11 +33,42 @@ def transcribe_wav(wav_path: Path, model: str, language: str) -> dict[str, Any]:
         text = (seg.get("text") or "").strip()
         if not text:
             continue
+        start = float(seg["start"])
+        end = float(seg["end"])
+        words_out: list[dict[str, Any]] = []
+        for w in seg.get("words") or []:
+            wt = (w.get("word") or w.get("text") or "").strip()
+            if not wt:
+                continue
+            try:
+                ws = float(w.get("start"))
+                we = float(w.get("end"))
+            except (TypeError, ValueError):
+                continue
+            if we <= ws:
+                continue
+            words_out.append(
+                {
+                    "word": wt,
+                    "start": ws,
+                    "end": we,
+                    "probability": w.get("probability"),
+                }
+            )
+        # 用首尾词收紧段边界（Whisper 段 start 常含前置环境声）
+        if words_out:
+            start = float(words_out[0]["start"])
+            end = float(words_out[-1]["end"])
+            # 段首略留 40ms，避免切掉声母
+            start = max(0.0, start - 0.04)
+            if end <= start + 0.05:
+                end = start + 0.05
         segments.append(
             {
-                "start": float(seg["start"]),
-                "end": float(seg["end"]),
+                "start": start,
+                "end": end,
                 "text": text,
+                "words": words_out,
             }
         )
     return {
