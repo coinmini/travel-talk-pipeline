@@ -68,7 +68,8 @@
   3. 各口播文件片头 BGM 都会裁掉  
 - 画面：无声片段；**禁止 talk 再叠源音**；**禁止额外末镜冻尾**  
 - **剪映**：只导入 `work/package_by_talk/<口播>/剪映导入/`（见 `docs/PACKAGE_BY_TALK.md`）  
-  不要整夹导入（会带上多个 roughcut / 工程文件）
+  不要整夹导入（会带上多个 roughcut / 工程文件）  
+- **固定片尾**：项目或仓库根放置 `视频结尾.MP4`，`assemble` / 分包会自动接到每条成片末尾（`export.outro_video`）
 
 改对齐逻辑后请：
 

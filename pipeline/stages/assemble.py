@@ -15,7 +15,16 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from ..utils import ensure_dir, media_info, run, write_json, write_text
+from ..utils import (
+    append_outro_av,
+    ensure_dir,
+    media_info,
+    prepare_outro_assets,
+    resolve_outro_path,
+    run,
+    write_json,
+    write_text,
+)
 
 
 def _has_subtitles_filter() -> bool:
@@ -509,6 +518,69 @@ def run_assemble(
     if not burned:
         run(["ffmpeg", "-y", "-i", str(rough), "-c", "copy", str(final_path)])
 
+    # 固定片尾：每个视频末尾必须接上（视频结尾.MP4）
+    outro_meta: dict[str, Any] | None = None
+    project_dir = work_dir.parent if work_dir.name == "work" else work_dir
+    outro_src = resolve_outro_path(project_dir, cfg)
+    if outro_src is None:
+        # 兼容 work 在更深一层
+        outro_src = resolve_outro_path(work_dir.parent, cfg)
+    if outro_src is not None:
+        try:
+            assets = prepare_outro_assets(
+                outro_src,
+                work_dir,
+                width=width,
+                height=height,
+                fps=fps,
+                v_br=v_br,
+                a_br=a_br,
+            )
+            body = final_path
+            tmp_out = export_dir / "roughcut_with_outro.mp4"
+            append_outro_av(
+                body,
+                Path(assets["full"]),
+                tmp_out,
+                v_br=v_br,
+                a_br=a_br,
+            )
+            # replace final + nosub body with outro version
+            run(["ffmpeg", "-y", "-i", str(tmp_out), "-c", "copy", str(final_path)])
+            # nosub also get outro for consistency
+            append_outro_av(
+                rough,
+                Path(assets["full"]),
+                export_dir / "roughcut_nosub_with_outro.mp4",
+                v_br=v_br,
+                a_br=a_br,
+            )
+            run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(export_dir / "roughcut_nosub_with_outro.mp4"),
+                    "-c",
+                    "copy",
+                    str(rough),
+                ]
+            )
+            try:
+                tmp_out.unlink()
+                (export_dir / "roughcut_nosub_with_outro.mp4").unlink()
+            except OSError:
+                pass
+            outro_meta = assets
+            print(
+                f"  [outro] appended {outro_src.name} "
+                f"({assets.get('duration', 0):.2f}s) → {final_path.name}"
+            )
+        except Exception as e:
+            print(f"  [warn] outro append failed: {e}")
+    else:
+        print("  [outro] skip: 未找到 视频结尾.MP4（可放在项目目录或 export.outro_video）")
+
     info = media_info(final_path)
     result = {
         "roughcut": str(final_path),
@@ -526,11 +598,13 @@ def run_assemble(
         "image_motion": image_motion,
         "image_motion_count": image_motion_count,
         "image_zoom_max": image_zoom_max,
+        "outro": outro_meta,
     }
     write_json(work_dir / "assemble.json", result)
     print(
         f"  exported: {final_path} ({info.get('duration', 0):.1f}s, "
         f"audio=single_vo, pieces={len(part_paths)}"
-        f"{f', image_kenburns={image_motion_count}' if image_motion_count else ''})"
+        f"{f', image_kenburns={image_motion_count}' if image_motion_count else ''}"
+        f"{', outro=yes' if outro_meta else ''})"
     )
     return result

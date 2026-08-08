@@ -21,7 +21,8 @@ talk:
   speech_onset_peak_ratio: 0.45
   speech_onset_min_hold_sec: 0.12
   trim_leading_only_global_first: false  # 每个口播文件第一句都处理
-  segment_tail_pad_sec: 0.06             # release 实测后的安全底（非硬补尾巴）
+  segment_tail_pad_sec: 0.04             # release 后安全底（短，防冻尾）
+  speech_release_max_extend_sec: 0.16    # 末字最多再延；过大口播脸会僵住
 
 broll:
   min_clip_sec: 1.6
@@ -50,6 +51,8 @@ export:
   include_english_stub: true
   # 多口播 → package_by_talk/<口播>/{剪映导入,预览,工程}/（只导入「剪映导入」）
   split_by_talk: true
+  # 每条成片固定片尾（相对项目目录或仓库根）；false 关闭
+  outro_video: 视频结尾.MP4
 
 # 静态图盖画：推近/拉远/平移（Ken Burns）
 assemble:

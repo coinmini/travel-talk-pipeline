@@ -49,8 +49,10 @@ DEFAULTS: dict[str, Any] = {
         "speech_onset_min_hold_sec": 0.12,
         # False=每个口播文件第一句都裁；True=仅整条时间线第一句
         "trim_leading_only_global_first": False,
-        # 末词声学 release 实测后再加的极小安全底（秒）；主延展靠 RMS，勿靠大 pad
-        "segment_tail_pad_sec": 0.06,
+        # 末词 release 后安全底（秒）；主延展靠 RMS
+        "segment_tail_pad_sec": 0.04,
+        # 末字最多再延长多久（秒）；过大口播脸会「冻尾」过久
+        "speech_release_max_extend_sec": 0.16,
     },
     "broll": {
         # 单镜目标时长范围
@@ -152,6 +154,8 @@ DEFAULTS: dict[str, Any] = {
         "include_english_stub": True,
         # 多口播源 → work/package_by_talk/<口播名>/{剪映导入,预览,工程}/
         "split_by_talk": True,
+        # 每条成片固定片尾（项目目录或仓库根下的 视频结尾.MP4）；false 关闭
+        "outro_video": "视频结尾.MP4",
     },
     # 静态图 B-roll：Ken Burns 推拉/平移，避免呆板定格
     "assemble": {

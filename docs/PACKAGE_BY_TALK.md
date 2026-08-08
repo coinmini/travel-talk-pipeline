@@ -37,12 +37,17 @@ work/package_by_talk/
    - 各 clip **裁/补到 plan 段长**（与对应人声段一致）  
    - `voiceover_clean.wav` **不带尾静音**  
    - 预览 roughcut 与人声等长 mux（禁止 `-shortest` 裁尾）  
+4. **固定片尾**：每个成片 / 分包末尾自动接 `视频结尾.MP4`（**保留原片声音**）  
+   - 预览 roughcut：正文 + 有声片尾一次 mux  
+   - 剪映导入：最后一镜 `NN_outro_视频结尾.mp4` **自带音轨**；`voiceover_clean.wav` 只含口播正文（避免双轨叠音）  
 
 ## 配置
 
 ```yaml
 export:
   split_by_talk: true   # 默认开；false 则只出 work/package/
+  # 固定片尾文件名（项目目录或仓库根）；设 false 关闭
+  outro_video: 视频结尾.MP4
 talk:
   segment_tail_pad_sec: 0.06  # release 后的安全底，不是硬补尾巴
 ```

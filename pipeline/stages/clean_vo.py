@@ -105,8 +105,8 @@ def detect_speech_release_end(
     *,
     peak_ratio: float = 0.22,
     min_hold_sec: float = 0.08,
-    max_extend_sec: float = 0.50,
-    release_sec: float = 0.05,
+    max_extend_sec: float = 0.18,
+    release_sec: float = 0.04,
     abs_floor: float = 1500.0,
     frame_sec: float = 0.02,
 ) -> float:
@@ -114,13 +114,13 @@ def detect_speech_release_end(
 
     Root cause of clipped finals (e.g. 「自己」): Whisper ``word.end`` is a token
     boundary and often sits *before* the voiced release finishes. Cutting at
-    ``word.end`` (or a fixed pad that is too small on long finals / too large on
-    short ones) either chops the last syllable or adds dead air.
+    ``word.end`` either chops the last syllable; extending too far (e.g. ocean
+    BGM) freezes the talking-head on a dead hold — keep max_extend short.
 
     Method (mirrors onset, but from the last-word peak forward):
       1. Peak RMS inside the last word body
       2. After that peak, find first sustained drop below peak * peak_ratio
-      3. + release_sec headroom; clamp to [word_end, hard_cap]
+      3. + release_sec headroom; clamp to [word_end, word_end+max_extend, hard_cap]
 
     On failure, returns ``word_end_s`` (caller may add a tiny safety floor).
     """
@@ -129,8 +129,12 @@ def detect_speech_release_end(
     if hard_cap_s <= word_end_s + 0.01:
         return round(min(hard_cap_s, float(word_end_s)), 3)
 
+    # Hard limit: never freeze the talk face longer than max_extend after word_end
+    max_extend_sec = max(0.06, min(float(max_extend_sec), 0.35))
+    soft_cap = min(float(hard_cap_s), float(word_end_s) + max_extend_sec)
+
     search0 = max(0.0, float(word_start_s) - 0.05)
-    search1 = min(float(hard_cap_s), float(word_end_s) + float(max_extend_sec))
+    search1 = min(float(soft_cap), float(word_end_s) + float(max_extend_sec))
     if search1 <= search0 + 0.04:
         return round(min(hard_cap_s, float(word_end_s)), 3)
 
@@ -186,9 +190,9 @@ def detect_speech_release_end(
     else:
         end_abs = search0 + end_i * frame_sec + float(release_sec)
 
-    # Never earlier than Whisper token end; never past hard cap (next word / EOF)
+    # Never earlier than Whisper token end; never past soft/hard cap
     end_abs = max(float(word_end_s), end_abs)
-    end_abs = min(end_abs, float(hard_cap_s))
+    end_abs = min(end_abs, float(soft_cap), float(hard_cap_s))
     return round(end_abs, 3)
 
 
@@ -380,11 +384,13 @@ def run_clean_vo(
                 file_dur = float(media_info(Path(talk["path"])).get("duration") or 0) or None
             except Exception:
                 file_dur = None
-        # 实测 release 之后的极小安全底（编码器/播放器尾帧），不是「硬补尾巴」主手段
-        tail_safety = float(talk_cfg.get("segment_tail_pad_sec") or 0.06)
-        # 兼容旧配置：若仍写很大的 pad，降到合理安全底，真正延展靠 RMS release
-        if tail_safety > 0.12:
-            tail_safety = 0.06
+        # release 后安全底要短，避免口播脸「冻尾」过长
+        tail_safety = float(talk_cfg.get("segment_tail_pad_sec") or 0.04)
+        if tail_safety > 0.10:
+            tail_safety = 0.04
+        # 末字 release 最多延长（秒）；过大时海风/BGM 会把段尾拖成冻帧
+        release_max = float(talk_cfg.get("speech_release_max_extend_sec") or 0.16)
+        release_max = max(0.08, min(release_max, 0.28))
 
         wav_path = Path(talk.get("wav") or "")
         if not wav_path.exists():
@@ -483,20 +489,23 @@ def run_clean_vo(
                     last_w0,
                     w1,
                     hard_cap,
+                    max_extend_sec=release_max,
+                    release_sec=0.04,
                 )
-                # 再加极小安全底（AAC/播放器），夹在 hard_cap 内
-                new_end = min(hard_cap, max(float(src_end), measured) + tail_safety)
+                # 安全底 + 硬上限：word_end + release_max + safety，缩短口播冻尾
+                freeze_cap = min(hard_cap, w1 + release_max + tail_safety)
+                new_end = min(freeze_cap, max(float(src_end), measured) + tail_safety)
                 if new_end > float(src_end) + 0.02 or measured > w1 + 0.02:
                     print(
                         f"  [tail/release] {name}: word_end={w1:.2f}s → "
                         f"release={measured:.2f}s src_end={new_end:.2f}s "
-                        f"| {(seg.get('text') or '')[:24]}"
+                        f"(cap+{release_max:.2f}s) | {(seg.get('text') or '')[:24]}"
                     )
                 src_end = new_end
             else:
-                # 无词级/无 wav：末句略放宽，非末句贴 hard_cap
+                # 无词级/无 wav：末句只略放宽，避免长冻尾
                 if is_last_job_seg:
-                    src_end = min(hard_cap, float(src_end) + max(tail_safety, 0.12))
+                    src_end = min(hard_cap, float(src_end) + max(tail_safety, 0.08))
                 else:
                     src_end = min(hard_cap, float(src_end))
                 src_end = max(src_start + 0.05, src_end)

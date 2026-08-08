@@ -180,3 +180,201 @@ def extract_thumbnail(src: Path, dst: Path, t: float | None = None, width: int =
 def safe_stem(name: str, max_len: int = 40) -> str:
     s = re.sub(r"[^\w\u4e00-\u9fff\-]+", "_", Path(name).stem, flags=re.U)
     return s[:max_len] or "clip"
+
+
+def resolve_outro_path(
+    project_dir: Path,
+    cfg: dict[str, Any] | None = None,
+) -> Path | None:
+    """Locate fixed end-card video (default: 视频结尾.MP4).
+
+    Search order:
+      1) export.outro_video absolute / relative to project_dir
+      2) project_dir/视频结尾.MP4
+      3) project_dir.parent/视频结尾.MP4  (repo root next to 越南/)
+    """
+    exp = (cfg or {}).get("export") or {}
+    raw = exp.get("outro_video")
+    if raw is False or raw == "":
+        return None
+    candidates: list[Path] = []
+    if raw:
+        p = Path(str(raw))
+        candidates.append(p if p.is_absolute() else project_dir / p)
+        candidates.append(project_dir.parent / p.name)
+    for name in ("视频结尾.MP4", "视频结尾.mp4", "outro.mp4", "ending.mp4"):
+        candidates.append(project_dir / name)
+        candidates.append(project_dir.parent / name)
+    seen: set[str] = set()
+    for c in candidates:
+        key = str(c.resolve()) if c.exists() else str(c)
+        if key in seen:
+            continue
+        seen.add(key)
+        if c.exists() and c.is_file():
+            return c.resolve()
+    return None
+
+
+def prepare_outro_assets(
+    outro_src: Path,
+    work_dir: Path,
+    *,
+    width: int = 1080,
+    height: int = 1920,
+    fps: int = 30,
+    v_br: str = "6M",
+    a_br: str = "192k",
+) -> dict[str, Any]:
+    """Normalize outro to project canvas; return silent video + wav + full A/V clip."""
+    ensure_dir(work_dir)
+    out_dir = ensure_dir(work_dir / "outro")
+    full = out_dir / "outro_full.mp4"
+    silent = out_dir / "outro_silent.mp4"
+    wav = out_dir / "outro_audio.wav"
+
+    vf = (
+        f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height},fps={fps},setsar=1,format=yuv420p"
+    )
+    # full A/V for concat onto roughcut
+    run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(outro_src),
+            "-vf",
+            vf,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-b:v",
+            v_br,
+            "-c:a",
+            "aac",
+            "-b:a",
+            a_br,
+            "-ar",
+            "44100",
+            "-ac",
+            "1",
+            "-movflags",
+            "+faststart",
+            str(full),
+        ]
+    )
+    # silent for CapCut picture track
+    run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(full),
+            "-an",
+            "-c:v",
+            "copy",
+            str(silent),
+        ]
+    )
+    # mono wav 44.1k for VO concat
+    run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(full),
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "44100",
+            str(wav),
+        ]
+    )
+    info = media_info(full)
+    return {
+        "src": str(outro_src),
+        "full": str(full),
+        "silent": str(silent),
+        "wav": str(wav),
+        "duration": float(info.get("duration") or 0),
+        "width": width,
+        "height": height,
+        "fps": fps,
+    }
+
+
+def append_outro_av(
+    body_mp4: Path,
+    outro_full: Path,
+    out_mp4: Path,
+    *,
+    v_br: str = "6M",
+    a_br: str = "192k",
+) -> Path:
+    """Concatenate body roughcut + normalized outro (both A/V)."""
+    ensure_dir(out_mp4.parent)
+    # Re-encode concat for codec/resolution safety
+    run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(body_mp4),
+            "-i",
+            str(outro_full),
+            "-filter_complex",
+            "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[v][a]",
+            "-map",
+            "[v]",
+            "-map",
+            "[a]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-b:v",
+            v_br,
+            "-c:a",
+            "aac",
+            "-b:a",
+            a_br,
+            "-ar",
+            "44100",
+            "-ac",
+            "1",
+            "-movflags",
+            "+faststart",
+            str(out_mp4),
+        ]
+    )
+    return out_mp4
+
+
+def concat_wavs(parts: list[Path], out_wav: Path) -> Path:
+    """Concat mono wavs via concat demuxer."""
+    ensure_dir(out_wav.parent)
+    lst = out_wav.parent / f"_{out_wav.stem}_concat.txt"
+    write_text(lst, "\n".join(f"file '{p.resolve()}'" for p in parts) + "\n")
+    run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(lst),
+            "-c",
+            "copy",
+            str(out_wav),
+        ]
+    )
+    try:
+        lst.unlink()
+    except OSError:
+        pass
+    return out_wav

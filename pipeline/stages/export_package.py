@@ -7,7 +7,19 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from ..utils import ensure_dir, run, ts_clock, ts_srt, write_json, write_text
+from ..utils import (
+    append_outro_av,
+    concat_wavs,
+    ensure_dir,
+    media_info,
+    prepare_outro_assets,
+    resolve_outro_path,
+    run,
+    ts_clock,
+    ts_srt,
+    write_json,
+    write_text,
+)
 
 
 def run_export_package(
@@ -545,7 +557,9 @@ def run_export_split_by_talk(
                 "2. clips/ 按 01→末 顺序拖到视频轨，首尾相接、无空隙\n"
                 "3. voiceover_clean.wav 拖到音频轨，对齐时间线 0\n"
                 "4. 可选：captions_zh.srt\n\n"
-                "说明：各 clip 与对应人声段等长，无额外末镜冻尾。\n"
+                "说明：正文 clips 无声，与 voiceover_clean.wav 等长对齐 0 点；\n"
+                "最后一镜 NN_outro_视频结尾.mp4 为固定片尾且自带声音，\n"
+                "导入后不要静音该片段；人声轨不要再拼片尾音。\n"
             ),
         )
         write_text(
@@ -675,6 +689,93 @@ def run_export_split_by_talk(
                 concat_list.unlink()
             except OSError:
                 pass
+
+        # 固定片尾：每个分包成片 + 剪映分轨都必须带
+        outro_src = resolve_outro_path(project_dir, cfg)
+        if outro_src is not None:
+            try:
+                assets = prepare_outro_assets(
+                    outro_src,
+                    work_dir,
+                    width=width,
+                    height=height,
+                    fps=fps,
+                    v_br=v_br,
+                    a_br=a_br,
+                )
+                # 1) 预览 roughcut 接片尾
+                if rough.exists():
+                    tmp = preview_dir / "_body.mp4"
+                    run(["ffmpeg", "-y", "-i", str(rough), "-c", "copy", str(tmp)])
+                    append_outro_av(
+                        tmp,
+                        Path(assets["full"]),
+                        rough,
+                        v_br=v_br,
+                        a_br=a_br,
+                    )
+                    try:
+                        tmp.unlink()
+                    except OSError:
+                        pass
+                # 2) 剪映导入：末 clip 使用「有声音」片尾（自带音轨）
+                #    口播人声轨不再追加片尾音，避免双轨叠音；片尾靠 clip 自身音频
+                n = len(clip_rows) + 1
+                outro_clip = clips_dir / f"{n:02d}_outro_视频结尾.mp4"
+                run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-i",
+                        str(assets["full"]),
+                        "-c:v",
+                        "copy",
+                        "-c:a",
+                        "copy",
+                        str(outro_clip),
+                    ]
+                )
+                od = float(assets.get("duration") or 0)
+                t_end = float(clip_rows[-1]["timeline_end"]) if clip_rows else 0.0
+                clip_rows.append(
+                    {
+                        "type": "outro",
+                        "timeline_start": round(t_end, 3),
+                        "timeline_end": round(t_end + od, 3),
+                        "duration": round(od, 3),
+                        "src": assets["src"],
+                        "src_name": Path(assets["src"]).name,
+                        "src_start": 0.0,
+                        "src_end": round(od, 3),
+                        "text": "[片尾·有声]",
+                        "has_audio": True,
+                        "clip_file": outro_clip.name,
+                        "clip_path": str(outro_clip),
+                    }
+                )
+                # 人声仍为口播正文时长；总片长 = 口播 + 片尾
+                speech_only = float(media_info(local_vo).get("duration") or speech_dur)
+                total_with_outro = speech_only + od
+                local_vo_meta["total_duration"] = round(speech_only, 3)
+                local_vo_meta["outro_sec"] = round(od, 3)
+                local_vo_meta["outro_has_audio"] = True
+                local_vo_meta["note"] = (
+                    "voiceover_clean.wav 仅口播；片尾音在末 clip "
+                    f"{outro_clip.name} 自带，勿再静音该片段"
+                )
+                write_json(meta_dir / "voiceover.json", local_vo_meta)
+                local_plan["total_duration"] = round(total_with_outro, 3)
+                local_plan["slot_count"] = len(clip_rows)
+                local_plan["picture_count"] = len(clip_rows)
+                local_plan["picture_timeline"] = clip_rows
+                write_json(meta_dir / "picture_plan.json", local_plan)
+                dur = total_with_outro
+                print(
+                    f"  [outro] {talk_name}: +{od:.2f}s 有声片尾 → {outro_clip.name} "
+                    f"(VO 不叠片尾音)"
+                )
+            except Exception as e:
+                print(f"  [warn] outro for {talk_name}: {e}")
 
         part_title = f"{title_base} · {stem}"
         # timeline.md → 工程/
