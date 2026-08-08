@@ -18,7 +18,8 @@
 | 大量盖 B-roll、少露脸 | `target_face_ratio` + 两轮匹配（先锁主体词） |
 | 说到什么看到什么 | 口播关键词 ↔ B-roll 标签严格命中（河马/水鸟/倒影/船…） |
 | B-roll 不复用、不冻帧硬撑 | `max_reuse: 1`；源不够长则换镜或露脸 |
-| 可选「更聪明」 | **Grok Build 会话**填 JSON（非外部 API） |
+| 可选「更聪明」 | **Grok Build 会话**填 JSON（标签/叙事，非外部 API） |
+| 本地 B-roll 语义不够 | **Seedance 文生视频**补真实感空镜（本机 dreamina CLI） |
 
 ---
 
@@ -35,6 +36,7 @@
 │  pipeline（纯代码编排）                               │
 │  ingest → transcribe → clean_vo → tag_broll         │
 │       → [ai_prepare → apply_ai] → match             │
+│       → [ai_video_prepare → seedance → apply]       │
 │       → assemble → package                          │
 └─────────────────────────────────────────────────────┘
         │
@@ -52,6 +54,8 @@
 | `ai_prepare` | 可选：导出缩略图 + 口播文案分析包 |
 | `apply_ai` | 可选：消费 `work/ai/*.json` |
 | `match` | 两轮匹配：主体词优先 → 其余盖空镜 / 低露脸 |
+| `ai_video_prepare` | 可选：导出 `work/ai_video` 结构化 prompt 包 |
+| `ai_video_apply` | 可选：把 Seedance 成片写回 `picture_plan`（禁止复用） |
 | `assemble` | **无声画面轨** + **单人声轨** mux 成片 |
 | `package` | 导出 clips / timeline / SRT |
 
@@ -140,6 +144,29 @@ python run_pipeline.py run my_trip --from-stage apply_ai
 
 ---
 
+## 可选 AI 视频 B-roll（Seedance / 即梦 CLI）
+
+当库内 B-roll **语义盖不上口播**（如 AI/展会观点段却是海景）时，用 **文生视频** 补真实感空镜。
+
+- 登录与积分在本机 `dreamina` 完成；**仓库不保存任何 key/token**
+- Prompt 必须用 skill 结构（【基础设定】/【画面内容】…），不要压成长白话
+- **一条生成视频只盖一个 piece**（`max_reuse: 1`）
+
+```bash
+# match 之后
+python run_pipeline.py run my_trip --from-stage ai_video_prepare
+# 编辑 work/ai_video/prompts/*.txt 与 manifest.yaml
+python scripts/seedance_t2v.py --work my_trip/work
+python scripts/seedance_poll_download.py \
+  --map my_trip/work/ai_video/id_map.txt \
+  --out my_trip/work/ai_video/videos
+python run_pipeline.py run my_trip --from-stage ai_video_apply   # 含 assemble/package
+```
+
+详见：`docs/AI_VIDEO_SEEDANCE.md`、`SEEDANCE_CLI.md`、`examples/ai_video/`。
+
+---
+
 ## 常用命令
 
 ```bash
@@ -199,6 +226,10 @@ my_trip/work/
     pack/thumbs/
     broll_vlm.json
     narrative_plan.json
+  ai_video/                    # ai_video_prepare 时生成（本地视频不入库）
+    manifest.yaml
+    prompts/*.txt
+    videos/*.mp4
 ```
 
 ---

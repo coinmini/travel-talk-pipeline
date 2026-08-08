@@ -44,3 +44,14 @@ export:
 whisper:
   model: "mlx-community/whisper-large-v3-mlx"
   language: zh
+
+# 可选：Seedance/Dreamina 文生视频补 B-roll（本机 dreamina CLI，无密钥入库）
+# ai_video:
+#   model_version: seedance2.5
+#   ratio: "9:16"
+#   video_resolution: 720p
+#   duration: 5
+#   max_reuse: 1
+#   text_contains: ["人工智能", "供应商", "信任"]
+#   # piece_indices: [19, 21, 23]
+

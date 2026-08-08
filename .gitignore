@@ -53,3 +53,18 @@ projects/*/
 # Logs / temp
 *.log
 /tmp/
+
+# Secrets / credentials (never commit)
+.env.*
+*.pem
+*.key
+**/credentials*
+**/*secret*
+**/auth.json
+**/.dreamina_cli/
+**/dreamina_token*
+# accidental local AI video dumps outside work/
+**/generated/
+**/videos_t2v/
+**/jobs.jsonl
+**/id_map*.txt

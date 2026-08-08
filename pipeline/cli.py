@@ -11,7 +11,9 @@ from .config import init_project_yaml, load_project_config
 from .utils import ensure_dir, read_json, write_json
 
 
-# 核心阶段 + 可选 AI（Grok Build 分析，非外部 API）
+# 核心阶段 + 可选 AI
+# - ai_prepare / apply_ai: Grok Build 会话填 JSON（标签/叙事）
+# - ai_video_prepare / ai_video_apply: Seedance/Dreamina CLI 文生视频盖 B-roll
 STAGES = [
     "ingest",
     "transcribe",
@@ -20,6 +22,8 @@ STAGES = [
     "ai_prepare",  # 导出分析包
     "apply_ai",  # 消费 work/ai/*.json
     "match",
+    "ai_video_prepare",  # 导出 work/ai_video 结构化 prompt 包
+    "ai_video_apply",  # 把生成视频写回 picture_plan（禁止复用）
     "assemble",
     "package",
 ]
@@ -32,8 +36,18 @@ STAGE_FILES = {
     "ai_prepare": "ai_prepare.json",
     "apply_ai": "ai_apply.json",
     "match": "picture_plan.json",
+    "ai_video_prepare": "ai_video_prepare.json",
+    "ai_video_apply": "ai_video_apply.json",
     "assemble": "assemble.json",
     "package": "package.json",
+}
+
+# 默认全流程不自动跑的可选阶段
+OPTIONAL_STAGES = {
+    "ai_prepare",
+    "apply_ai",
+    "ai_video_prepare",
+    "ai_video_apply",
 }
 
 
@@ -87,11 +101,10 @@ def run_pipeline(
     write_json(work_dir / "resolved_config.json", cfg)
 
     if with_ai and stages is None:
-        # 默认全流程 + AI：prepare 后若已有填写则 apply，否则停在 prepare 提示
-        stages = list(STAGES)
-    selected = stages or [
-        s for s in STAGES if s not in ("ai_prepare", "apply_ai")
-    ]
+        # 默认全流程 + 标签 AI：prepare 后若已有填写则 apply，否则停在 prepare 提示
+        # （不含 Seedance 视频生成；视频用 --from-stage ai_video_prepare）
+        stages = [s for s in STAGES if s not in ("ai_video_prepare", "ai_video_apply")]
+    selected = stages or [s for s in STAGES if s not in OPTIONAL_STAGES]
 
     for s in selected:
         if s not in STAGES:
@@ -205,11 +218,48 @@ def run_pipeline(
             broll_tags = read_json(work_dir / "broll_tags.json")
         results["match"] = run_match(voiceover, broll_tags, work_dir, cfg)
 
+    if "ai_video_prepare" in selected:
+        from .stages.ai_video_prepare import run_ai_video_prepare
+
+        banner("ai_video_prepare (Seedance pack)")
+        picture_plan = None
+        if (work_dir / "picture_plan.json").exists():
+            picture_plan = read_json(work_dir / "picture_plan.json")
+        elif results.get("match"):
+            picture_plan = results["match"]
+        results["ai_video_prepare"] = run_ai_video_prepare(
+            work_dir, cfg, picture_plan=picture_plan
+        )
+        print(
+            "\n⏸  已导出 AI 视频包。请：\n"
+            f"   1. 编辑 {work_dir / 'ai_video' / 'manifest.yaml'}（一条 clip 对应一个 piece，禁止复用）\n"
+            f"   2. 按 skill 结构写好 {work_dir / 'ai_video' / 'prompts'}/*.txt\n"
+            f"   3. dreamina login && python scripts/seedance_t2v.py --work {work_dir}\n"
+            f"   4. python run_pipeline.py run {project_dir.name} --from-stage ai_video_apply\n"
+        )
+
+    if "ai_video_apply" in selected:
+        from .stages.ai_video_apply import run_ai_video_apply
+
+        banner("ai_video_apply")
+        picture_plan = (
+            read_json(work_dir / "picture_plan.json")
+            if (work_dir / "picture_plan.json").exists()
+            else results.get("match")
+        )
+        results["ai_video_apply"] = run_ai_video_apply(
+            work_dir, cfg, picture_plan=picture_plan
+        )
+
     if "assemble" in selected:
         from .stages.assemble import run_assemble
 
         banner("assemble")
-        picture_plan = results.get("match") or _load_stage(work_dir, "match")
+        # 优先磁盘上的 picture_plan（可能已被 ai_video_apply 改写）
+        if (work_dir / "picture_plan.json").exists():
+            picture_plan = read_json(work_dir / "picture_plan.json")
+        else:
+            picture_plan = results.get("match") or _load_stage(work_dir, "match")
         voiceover = results.get("clean_vo") or _load_stage(work_dir, "clean_vo")
         results["assemble"] = run_assemble(picture_plan, voiceover, work_dir, cfg)
 
@@ -223,7 +273,11 @@ def run_pipeline(
             cfg,
             asset_index=results.get("ingest") or _load_stage(work_dir, "ingest"),
             voiceover=results.get("clean_vo") or _load_stage(work_dir, "clean_vo"),
-            picture_plan=results.get("match") or _load_stage(work_dir, "match"),
+            picture_plan=(
+            read_json(work_dir / "picture_plan.json")
+            if (work_dir / "picture_plan.json").exists()
+            else results.get("match") or _load_stage(work_dir, "match")
+        ),
             assemble=results.get("assemble")
             or (
                 _load_stage(work_dir, "assemble")
@@ -292,7 +346,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "stages":
         for i, s in enumerate(STAGES, 1):
-            mark = " (Grok Build AI)" if s in ("ai_prepare", "apply_ai") else ""
+            mark = ""
+            if s in ("ai_prepare", "apply_ai"):
+                mark = " (Grok Build 标签/叙事 AI)"
+            elif s in ("ai_video_prepare", "ai_video_apply"):
+                mark = " (Seedance/Dreamina 文生视频 B-roll)"
             print(f"{i}. {s}{mark}")
         return 0
 

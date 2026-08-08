@@ -25,6 +25,11 @@ B-roll ──tag(+AI)──► tags + scores                          │
                 │                                           │
                 └──────── match (2-pass) ──► picture_plan   │
                                               │             │
+                         optional: ai_video_prepare         │
+                              structured prompts            │
+                              Seedance text2video           │
+                         optional: ai_video_apply ──────────┤
+                                              │             │
                                          无声视频段 concat    │
                                               ▼             │
                                          picture_track ────mux──► roughcut.mp4
@@ -37,6 +42,8 @@ B-roll ──tag(+AI)──► tags + scores                          │
 - `pipeline/utils.py` — ffprobe / 抽帧 / 工具
 - `pipeline/stages/*` — 各阶段
 - `pipeline/ai/*` — Grok Build AI 产物约定
+- `pipeline/ai_video/*` — Seedance/Dreamina 文生视频 B-roll
+- `scripts/seedance_t2v.py` / `seedance_poll_download.py` — CLI 提交与下载
 - `pipeline/templates/*` — 默认与示例 yaml
 
 ## 扩展点
@@ -44,3 +51,5 @@ B-roll ──tag(+AI)──► tags + scores                          │
 1. **换 ASR**：替换 `stages/transcribe.py`，保持 segments 结构  
 2. **换匹配打分**：改 `stages/match.py` 的 `_score_broll` / PRIMARY 词表  
 3. **真·多模态 API**：可在 `apply_ai` 前增加自动写 `broll_vlm.json` 的脚本；接口保持 JSON 契约即可  
+4. **AI 视频提供商**：当前仅 `seedance_cli`（本机 dreamina）；新 provider 接在 `pipeline/ai_video/` 即可  
+

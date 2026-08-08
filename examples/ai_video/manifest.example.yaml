@@ -1,0 +1,31 @@
+# 复制到 <project>/work/ai_video/manifest.yaml 后按项目修改
+# 规则：一条 clip 只绑定一个 picture_plan piece_index，max_reuse: 1
+
+provider: seedance_cli
+model_version: seedance2.5
+ratio: "9:16"
+video_resolution: 720p
+duration: 5
+style: phone_documentary_realism
+max_reuse: 1
+
+notes: |
+  1) 编辑 prompts/*.txt 为 skill 结构（【基础设定】【氛围与画质】【画面内容】【负面要求】）
+  2) python scripts/seedance_t2v.py --work <project>/work
+  3) python scripts/seedance_poll_download.py --map <work>/ai_video/id_map.txt --out <work>/ai_video/videos
+  4) python run_pipeline.py run <project> --from-stage ai_video_apply
+
+clips:
+  - id: t01_trade_show_aisle
+    piece_index: 19
+    vo_text: "有一个非常明显的趋势"
+    prompt_file: prompts/t01_trade_show_aisle.txt
+    output_file: videos/t01_trade_show_aisle.mp4
+    tags: [展会, 通道]
+
+  - id: t02_factory_robot
+    piece_index: 21
+    vo_text: "走向能够感知操作和执行任务的真实物理世界"
+    prompt_file: prompts/t02_factory_robot.txt
+    output_file: videos/t02_factory_robot.mp4
+    tags: [工厂, 机械臂, 物理世界]
