@@ -142,6 +142,22 @@ DEFAULTS: dict[str, Any] = {
         "subtitle_margin_v": 160,
         "include_english_stub": True,
     },
+    # 静态图 B-roll：Ken Burns 推拉/平移，避免呆板定格
+    "assemble": {
+        "image_motion": True,
+        "image_zoom_max": 1.22,
+        "image_motion_styles": [
+            "zoom_in",
+            "zoom_out",
+            "pan_left",
+            "pan_right",
+            "pan_up",
+            "pan_down",
+            "zoom_in_up",
+            "zoom_out_right",
+        ],
+    },
+
     "whisper": {
         "model": "mlx-community/whisper-large-v3-mlx",
         "language": "zh",

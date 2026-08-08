@@ -42,6 +42,12 @@ export:
   subtitle_margin_v: 160
   include_english_stub: true
 
+# 静态图盖画：推近/拉远/平移（Ken Burns）
+assemble:
+  image_motion: true
+  image_zoom_max: 1.22
+  # image_motion_styles: [zoom_in, zoom_out, pan_left, pan_right, pan_up, pan_down]
+
 whisper:
   model: "mlx-community/whisper-large-v3-mlx"
   language: zh

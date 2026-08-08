@@ -56,7 +56,7 @@
 | `match` | 两轮匹配：主体词优先 → 其余盖空镜 / 低露脸 |
 | `ai_video_prepare` | 可选：导出 `work/ai_video` 结构化 prompt 包 |
 | `ai_video_apply` | 可选：把 Seedance 成片写回 `picture_plan`（禁止复用） |
-| `assemble` | **无声画面轨** + **单人声轨** mux 成片 |
+| `assemble` | **无声画面轨** + **单人声轨** mux 成片；静态图自动 Ken Burns 推拉/平移 |
 | `package` | 导出 clips / timeline / SRT |
 
 ### 音频策略（重要）

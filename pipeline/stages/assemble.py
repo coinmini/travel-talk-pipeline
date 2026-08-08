@@ -31,6 +31,95 @@ def _snap_dur(dur: float, fps: int) -> float:
     return frames / float(fps)
 
 
+# 静态图 Ken Burns：按片序号轮换，避免全片同一动效
+_IMAGE_MOTIONS = (
+    "zoom_in",
+    "zoom_out",
+    "pan_right",
+    "pan_left",
+    "pan_up",
+    "pan_down",
+    "zoom_in_up",
+    "zoom_out_right",
+)
+
+
+def _pick_image_motion(piece: dict[str, Any], index: int, styles: list[str] | None) -> str:
+    explicit = (piece.get("motion") or piece.get("image_motion") or "").strip()
+    if explicit:
+        return explicit
+    pool = [s for s in (styles or list(_IMAGE_MOTIONS)) if s]
+    if not pool:
+        pool = list(_IMAGE_MOTIONS)
+    # 稳定轮换：同一 piece 重跑结果一致
+    key = f"{piece.get('src_name') or piece.get('src') or index}:{index}"
+    h = sum(ord(c) for c in key)
+    return pool[h % len(pool)]
+
+
+def _image_motion_vf(
+    width: int,
+    height: int,
+    fps: int,
+    dur: float,
+    motion: str,
+    *,
+    zoom_max: float = 1.22,
+) -> str:
+    """Build ffmpeg vf for still-image Ken Burns (zoom/pan).
+
+    Pre-scale to 2× canvas so zoompan has room, then animate to target size.
+    """
+    frames = max(1, int(round(float(dur) * fps)))
+    z1 = max(1.05, float(zoom_max))
+    # on: 0 .. frames-1
+    # progress p = on/(frames-1) ≈ on/max(frames-1,1)
+    denom = max(frames - 1, 1)
+
+    m = (motion or "zoom_in").lower().strip()
+    if m == "zoom_out":
+        z = f"max({z1:.4f}-{(z1-1.0):.6f}*on/{denom},1.0)"
+        x = "iw/2-(iw/zoom/2)"
+        y = "ih/2-(ih/zoom/2)"
+    elif m == "pan_right":
+        z = f"{(1.0 + (z1 - 1.0) * 0.55):.4f}"
+        x = f"(iw-iw/zoom)*on/{denom}"
+        y = "ih/2-(ih/zoom/2)"
+    elif m == "pan_left":
+        z = f"{(1.0 + (z1 - 1.0) * 0.55):.4f}"
+        x = f"(iw-iw/zoom)*(1-on/{denom})"
+        y = "ih/2-(ih/zoom/2)"
+    elif m == "pan_down":
+        z = f"{(1.0 + (z1 - 1.0) * 0.55):.4f}"
+        x = "iw/2-(iw/zoom/2)"
+        y = f"(ih-ih/zoom)*on/{denom}"
+    elif m == "pan_up":
+        z = f"{(1.0 + (z1 - 1.0) * 0.55):.4f}"
+        x = "iw/2-(iw/zoom/2)"
+        y = f"(ih-ih/zoom)*(1-on/{denom})"
+    elif m == "zoom_in_up":
+        z = f"min(1.0+{(z1-1.0):.6f}*on/{denom},{z1:.4f})"
+        x = "iw/2-(iw/zoom/2)"
+        y = f"(ih-ih/zoom)*(1-0.65*on/{denom})"
+    elif m == "zoom_out_right":
+        z = f"max({z1:.4f}-{(z1-1.0):.6f}*on/{denom},1.0)"
+        x = f"(iw-iw/zoom)*on/{denom}"
+        y = "ih/2-(ih/zoom/2)"
+    else:  # zoom_in default
+        z = f"min(1.0+{(z1-1.0):.6f}*on/{denom},{z1:.4f})"
+        x = "iw/2-(iw/zoom/2)"
+        y = "ih/2-(ih/zoom/2)"
+
+    # 2× 画布保证 zoom/pan 不露黑边
+    sw, sh = width * 2, height * 2
+    return (
+        f"scale={sw}:{sh}:force_original_aspect_ratio=increase,"
+        f"crop={sw}:{sh},"
+        f"zoompan=z='{z}':x='{x}':y='{y}':d={frames}:s={width}x{height}:fps={fps},"
+        f"setsar=1,format=yuv420p"
+    )
+
+
 def _v_filters(
     width: int,
     height: int,
@@ -82,6 +171,10 @@ def _render_video_only(
     height: int,
     fps: int,
     dur: float,
+    index: int = 0,
+    image_motion: bool = True,
+    image_motion_styles: list[str] | None = None,
+    image_zoom_max: float = 1.22,
 ) -> None:
     """Render a silent video clip of exact duration `dur`."""
     ensure_dir(out.parent)
@@ -93,11 +186,20 @@ def _render_video_only(
         src_span = max(0.05, float(piece["src_end"]) - ss)
 
     if is_image:
-        vf = (
-            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-            f"crop={width}:{height},fps={fps},setsar=1,format=yuv420p,"
-            f"trim=duration={dur:.6f},setpts=PTS-STARTPTS"
-        )
+        if image_motion and piece.get("image_motion") is not False:
+            motion = _pick_image_motion(piece, index, image_motion_styles)
+            piece["image_motion_applied"] = motion
+            vf = _image_motion_vf(
+                width, height, fps, dur, motion, zoom_max=image_zoom_max
+            )
+        else:
+            motion = "none"
+            piece["image_motion_applied"] = motion
+            vf = (
+                f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+                f"crop={width}:{height},fps={fps},setsar=1,format=yuv420p,"
+                f"trim=duration={dur:.6f},setpts=PTS-STARTPTS"
+            )
         _run_ffmpeg(
             [
                 "ffmpeg",
@@ -187,6 +289,12 @@ def run_assemble(
     font = exp.get("subtitle_font") or "PingFang SC"
     fontsize = int(exp.get("subtitle_fontsize") or 42)
     margin_v = int(exp.get("subtitle_margin_v") or 160)
+    asm_cfg = cfg.get("assemble") or {}
+    image_motion = bool(asm_cfg.get("image_motion", True))
+    image_motion_styles = asm_cfg.get("image_motion_styles")
+    if isinstance(image_motion_styles, str):
+        image_motion_styles = [s.strip() for s in image_motion_styles.split(",") if s.strip()]
+    image_zoom_max = float(asm_cfg.get("image_zoom_max") or 1.22)
 
     vo_wav = Path(voiceover.get("voiceover_wav") or "")
     if not vo_wav.exists():
@@ -206,6 +314,7 @@ def run_assemble(
     # 画面时长必须与 VO 段一致：优先用 piece.duration（来自 clean_vo）
     part_paths: list[Path] = []
     total = 0.0
+    image_motion_count = 0
     for i, piece in enumerate(pieces):
         dur = float(piece.get("duration") or 0.1)
         # talk 再保险：不超过源跨度
@@ -215,13 +324,36 @@ def run_assemble(
                 dur = min(dur, span)
         dur = _snap_dur(dur, fps)
         out = parts_dir / f"v_{i:04d}.mp4"
+        src_name = str(piece.get("src_name", ""))[:22]
+        is_img = Path(str(piece.get("src") or "")).suffix.lower() in {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".webp",
+            ".heic",
+        }
+        motion_note = ""
+        if is_img and image_motion:
+            motion_note = f" motion={_pick_image_motion(piece, i, image_motion_styles)}"
+            image_motion_count += 1
         print(
             f"  render video {i+1}/{len(pieces)}: {piece['type']} "
-            f"{str(piece.get('src_name', ''))[:22]} "
+            f"{src_name}{motion_note} "
             f"src={float(piece.get('src_start') or 0):.2f} dur={dur:.2f}"
         )
         _render_video_only(
-            piece, out, width=width, height=height, fps=fps, dur=dur
+            piece,
+            out,
+            width=width,
+            height=height,
+            fps=fps,
+            dur=dur,
+            index=i,
+            image_motion=image_motion,
+            image_motion_styles=image_motion_styles
+            if isinstance(image_motion_styles, list)
+            else None,
+            image_zoom_max=image_zoom_max,
         )
         info = media_info(out)
         if abs(float(info["duration"]) - dur) > 0.2:
@@ -368,10 +500,14 @@ def run_assemble(
         "actual_duration": info.get("duration"),
         "lip_sync_mode": "single_vo_track",
         "audio_mode": "voiceover_clean_only",
+        "image_motion": image_motion,
+        "image_motion_count": image_motion_count,
+        "image_zoom_max": image_zoom_max,
     }
     write_json(work_dir / "assemble.json", result)
     print(
         f"  exported: {final_path} ({info.get('duration', 0):.1f}s, "
-        f"audio=single_vo, pieces={len(part_paths)})"
+        f"audio=single_vo, pieces={len(part_paths)}"
+        f"{f', image_kenburns={image_motion_count}' if image_motion_count else ''})"
     )
     return result
